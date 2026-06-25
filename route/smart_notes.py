@@ -1,17 +1,25 @@
 import re
 import io
+import os
 import collections
-from datetime import datetime
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, status
 from pypdf import PdfReader
 from PIL import Image
 import pytesseract
-from firebase_admin import firestore
+import logging
 
+# Import your centralized Firestore connection instance
+from database.firebase import db
 
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+logger = logging.getLogger("smart_notes")
 smart_notes_router = APIRouter()
+
+# Dynamic Tesseract environment routing
+# Only uses the hardcoded Windows binary pathway if executing on a local NT operating system
+if os.name == 'nt':
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 
 def algorithm_summarize(full_text: str, num_keywords: int = 6, instruction: str = "") -> str:
@@ -39,7 +47,6 @@ def algorithm_summarize(full_text: str, num_keywords: int = 6, instruction: str 
         'about', 'than', 'also', 'such', 'through', 'more', 'focus'
     }
 
-    # Extract target focal terms from the user's custom instruction
     instruction_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', instruction.lower()))
     instruction_words = instruction_words.difference(stop_words)
 
@@ -100,34 +107,39 @@ def algorithm_summarize(full_text: str, num_keywords: int = 6, instruction: str 
     return markdown_output
 
 
-@smart_notes_router.post("/summarize")
+@smart_notes_router.post("/summarize", status_code=status.HTTP_200_OK)
 async def summarize_document(
     file: UploadFile = File(...),
-    instruction: str = Form("") # Added optional instruction parameter form receiver
+    instruction: str = Form("")
 ):
     filename_lower = file.filename.lower()
     
-    pdf_extensions = {'.pdf', '.docs', '.txt'}
+    text_extensions = {'.pdf', '.txt'}
     image_extensions = {'.png', '.jpg', '.jpeg', '.jfif'}
+    allowed_extensions = text_extensions.union(image_extensions)
     
-    allowed_extensions = pdf_extensions.union(image_extensions)
-    has_valid_ext = any(filename_lower.endswith(ext) for ext in allowed_extensions)
-    
-    if not has_valid_ext:
+    if not any(filename_lower.endswith(ext) for ext in allowed_extensions):
         raise HTTPException(
-            status_code=400,
-            detail="Unsupported asset extension. Only PDFs and Image files (.png, .jpg, .jpeg, .jfif) are accepted."
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported asset extension. System handles text documents (.pdf, .txt) and images (.png, .jpg, .jpeg, .jfif)."
         )
 
     try:
         extracted_text = ""
 
-        if any(filename_lower.endswith(ext) for ext in pdf_extensions):
+        # Processing Strategy for Text Documents
+        if filename_lower.endswith('.pdf'):
             pdf_reader = PdfReader(file.file)
             for page in pdf_reader.pages:
                 page_text = page.extract_text()
                 if page_text:
                     extracted_text += page_text + " "
+                    
+        elif filename_lower.endswith('.txt'):
+            text_bytes = await file.read()
+            extracted_text = text_bytes.decode("utf-8", errors="ignore")
+
+        # Processing Strategy for Images (OCR Engine execution)
         else:
             image_bytes = await file.read()
             image_object = Image.open(io.BytesIO(image_bytes))
@@ -135,26 +147,26 @@ async def summarize_document(
 
         if not extracted_text.strip():
             raise HTTPException(
-                status_code=400,
-                detail="The upload processed successfully but contains no visible extractable textual data."
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The file content parsed successfully but contains no identifiable alphanumeric sequence."
             )
 
-        # Pass custom user guidance string context safely into calculations
         summary = algorithm_summarize(extracted_text, num_keywords=6, instruction=instruction)
 
-        db = firestore.client()
-
+        # Build clean structured production dictionary matching the dataset design
         note_data = {
             "title": file.filename,
             "summary": summary,
-            "custom_instruction": instruction,
-            "created_at": datetime.utcnow(),
-            "source_type": "pdf_upload" if filename_lower.endswith('.pdf') else "image_upload"
+            "custom_instruction": instruction.strip() or None,
+            "created_at": datetime.now(timezone.utc),
+            "source_type": "pdf_upload" if filename_lower.endswith('.pdf') else ("text_upload" if filename_lower.endswith('.txt') else "image_upload")
         }
 
+        # Safe execution using unified db driver instance instance
         doc_ref = db.collection("smart_notes").document()
         doc_ref.set(note_data)
 
+        logger.info(f"File '{file.filename}' processed successfully. Summary records cataloged under Doc ID: {doc_ref.id}")
         return {
             "status": "success",
             "document_id": doc_ref.id,
@@ -162,9 +174,11 @@ async def summarize_document(
             "summary": summary
         }
 
+    except HTTPException as http_err:
+        raise http_err
     except Exception as e:
-        print(f"Smart Notes Routing Failure: {str(e)}")
+        logger.error(f"Fatal processing failure on file execution sequence: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Local extraction failure: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Analysis pipeline runtime error: {str(e)}"
         )
