@@ -2,10 +2,7 @@
 FROM python:3.10-slim
 
 # Install system dependencies required for Tesseract OCR
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    libgl1-mesa-glx \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y tesseract-ocr libgl1 && rm -rf /var/lib/apt/lists/*
 
 # Set up the internal app directory
 WORKDIR /app
