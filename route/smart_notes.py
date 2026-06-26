@@ -65,7 +65,7 @@ def algorithm_summarize(full_text: str, num_keywords: int = 6, instruction: str 
 
     markdown_output = "## Core Keyword Definitions & Summaries\n\n"
     if instruction.strip():
-        markdown_output += f"> *Applied Summary Filter Instruction: \"{instruction}\"*\n\n"
+        markdown_output += f"> *Focusing on: \"{instruction}\"*\n\n"
 
     used_sentences = set()
     keywords_processed = 0
