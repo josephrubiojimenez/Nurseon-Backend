@@ -3,7 +3,7 @@ import logging
 import json
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Form, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import google.generativeai as genai
 
 from database.firebase import db
@@ -19,7 +19,8 @@ if GEMINI_API_KEY:
 class QuizGenerationPayload(BaseModel):
     uid: str
     topic: str
-    num_questions: int = 5
+    # Set default to 5, but allow numbers between 1 and 20 based on user input
+    num_questions: int = Field(default=5, ge=1, le=50)
 
 def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
     if not GEMINI_API_KEY:
@@ -47,7 +48,6 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
         response = model.generate_content(system_prompt + f"\n\nTopic: {topic}")
         clean_text = response.text.strip()
         
-        # Strip code block decorators if Gemini accidentally includes them
         if clean_text.startswith("```"):
             clean_text = clean_text.split("\n", 1)[1].rsplit("\n", 1)[0].strip()
         if clean_text.startswith("json"):
@@ -63,10 +63,10 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
 
 @quiz_router.post("/generate", status_code=status.HTTP_200_OK)
 async def generate_quiz(payload: QuizGenerationPayload):
-    # Enforce limit of 5 tokens for the quiz feature
     slots_remaining = enforce_feature_limit(payload.uid, "quiz", max_limit=5)
 
     try:
+        # Pass the dynamic input item size explicitly to the model runner
         questions_list = run_gemini_quiz_generation(payload.topic, payload.num_questions)
 
         quiz_data = {

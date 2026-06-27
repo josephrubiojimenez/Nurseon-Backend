@@ -53,6 +53,7 @@ app.include_router(
     tags=["Smart Notes"]
 )
 
+# Feature - Quiz
 app.include_router(
     quiz_router,
     prefix="/api/quiz",
