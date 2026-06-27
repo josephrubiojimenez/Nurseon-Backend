@@ -1,7 +1,7 @@
 import io
 import os
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, status
 from pypdf import PdfReader
@@ -10,6 +10,8 @@ import pytesseract
 import google.generativeai as genai
 
 from database.firebase import db
+# Import the newly created unified utility tracker
+from utils.limiters import enforce_feature_limit
 
 logger = logging.getLogger("smart_notes")
 smart_notes_router = APIRouter()
@@ -56,38 +58,6 @@ def run_gemini_ai_summary(full_text: str, custom_instruction: str = "") -> str:
         )
 
 
-def enforce_firestore_rate_limit(uid: str) -> int:
-    now = datetime.now(timezone.utc)
-    twenty_four_hours_ago = now - timedelta(days=1)
-    
-    rate_limit_ref = db.collection("rate_limits").document(uid)
-    doc = rate_limit_ref.get()
-    
-    timestamps = []
-    if doc.exists:
-        data = doc.to_dict()
-        timestamps = [t if t.tzinfo else t.replace(tzinfo=timezone.utc) for t in data.get("uploads", [])]
-    
-    valid_timestamps = [t for t in timestamps if t > twenty_four_hours_ago]
-    
-    if len(valid_timestamps) >= 5:
-        oldest_upload = min(valid_timestamps)
-        cooldown_end = oldest_upload + timedelta(days=1)
-
-        local_cooldown_time = cooldown_end.astimezone() 
-        formatted_time = local_cooldown_time.strftime("%I:%M %p")
-        
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Daily upload limit reached. Upload again at {formatted_time}."
-        )
-        
-    valid_timestamps.append(now)
-    rate_limit_ref.set({"uploads": valid_timestamps})
-    
-    return 5 - len(valid_timestamps)
-
-
 @smart_notes_router.post("/summarize", status_code=status.HTTP_200_OK)
 async def summarize_document(
     uid: str = Form(...), 
@@ -106,12 +76,13 @@ async def summarize_document(
             detail="Supported extensions for files are (.pdf, .txt) and images are (.png, .jpg, .jpeg, .jfif)."
         )
 
-    slots_remaining = enforce_firestore_rate_limit(uid)
+    # Call the new global rate limiter with a limit of 5 for smart notes
+    slots_remaining = enforce_feature_limit(uid, "smart_notes", max_limit=5)
 
     try:
         extracted_text = ""
         if filename_lower.endswith(('.pdf', '.txt')):
-            if filename_lower.endswith('.pdf', '.txt'):
+            if filename_lower.endswith('.pdf'):
                 pdf_reader = PdfReader(file.file)
                 for page in pdf_reader.pages:
                     page_text = page.extract_text()

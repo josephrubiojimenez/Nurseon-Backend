@@ -1,14 +1,10 @@
 import os
 import sys
-
+from dotenv import load_dotenv
+load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-# Import your centralized initialized database wrapper early
-# This guarantees your Firestore pool is active before routers load
 from database.firebase import db 
-
-# Router imports
 from route.smart_notes import smart_notes_router
 from route.auth import auth_router
 from route.document import doc_router
@@ -17,21 +13,14 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
 
-app = FastAPI(
-    title="Nurseon Production API",
-    description="Nurseon Backend Services",
-    version="1.0.0"
-)
+app = FastAPI()
 
-# --- 🔐 PRODUCTION CORS CONFIGURATION ---
-# Handles access boundaries safely between your local Vite UI client and Render's domain
 origins = [
     "http://localhost:5173",      # Local Vite dev server
     "http://127.0.0.1:5173",     # Local Vite dev server alternative
     "http://localhost:3000",      # Local React standard port
     "http://127.0.0.1:3000",
-    # 🌍 PLACEHOLDERS FOR YOUR LIVE WEB APPS:
-    # "https://nurseon.vercel.app", 
+    "https://nurseon.vercel.app", 
 ]
 
 app.add_middleware(
@@ -42,35 +31,37 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# --- ROUTER REGISTRATION ---
+# Registration
 app.include_router(
     auth_router,
     prefix="/api/auth",
     tags=["Authentication"]
 )
 
+# Feature - Read docs
 app.include_router(
     doc_router,
     prefix="/api/documents",
     tags=["Read Documents"]
 )
 
+# Feature - Smart notes
 app.include_router(
     smart_notes_router,
     prefix="/api/smart-notes",
     tags=["Smart Notes"]
 )
 
+# HTTP Status
 @app.get("/")
 async def root():
     return {
         "status": "online",
-        "message": "Nurseon Production Engine Operational"
+        "message": "Nurseon runs successfully"
     }
 
 if __name__ == "__main__":
     import uvicorn
-    # Local fallback driver execution
     uvicorn.run(
         "Nurseon:app",
         host="127.0.0.1",
