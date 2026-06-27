@@ -10,14 +10,11 @@ from PIL import Image
 import pytesseract
 import logging
 
-# Import your centralized Firestore connection instance
 from database.firebase import db
 
 logger = logging.getLogger("smart_notes")
 smart_notes_router = APIRouter()
 
-# Dynamic Tesseract environment routing
-# Only uses the hardcoded Windows binary pathway if executing on a local NT operating system
 if os.name == 'nt':
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
@@ -35,8 +32,9 @@ def algorithm_summarize(full_text: str, num_keywords: int = 6, instruction: str 
     sentences = cleaned_sentences
 
     if not sentences:
-        return "No readable text discovered in this file. Please verify it contains typed text lines."
+        return "No readable text. Please upload another file or image."
 
+    # Filtering contents
     stop_words = {
         'the', 'and', 'a', 'of', 'to', 'is', 'in', 'that',
         'it', 'for', 'on', 'with', 'as', 'this', 'by',
@@ -44,17 +42,20 @@ def algorithm_summarize(full_text: str, num_keywords: int = 6, instruction: str 
         'at', 'which', 'into', 'their', 'they', 'them',
         'these', 'those', 'have', 'has', 'had', 'will',
         'can', 'would', 'could', 'should', 'been', 'being',
-        'about', 'than', 'also', 'such', 'through', 'more', 'focus'
+        'about', 'than', 'also', 'such', 'through', 'more',
+        'focus', 'by', 'via' 
     }
 
+    #What to focus
     instruction_words = set(re.findall(r'\b[a-zA-Z]{4,}\b', instruction.lower()))
     instruction_words = instruction_words.difference(stop_words)
 
+     #Filtering words base on the user input
     words = re.findall(r'\b[a-zA-Z]{4,}\b', full_text.lower())
     filtered_words = [word for word in words if word not in stop_words]
 
     if not filtered_words:
-        return "Unable to compile structural summary definitions from the content."
+        return "Unable to summarize content."
 
     word_frequencies = collections.Counter(filtered_words)
     
@@ -121,14 +122,14 @@ async def summarize_document(
     if not any(filename_lower.endswith(ext) for ext in allowed_extensions):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported asset extension. System handles text documents (.pdf, .txt) and images (.png, .jpg, .jpeg, .jfif)."
+            detail="Supported extensions for files are (.pdf, .txt) and images are (.png, .jpg, .jpeg, .jfif)."
         )
 
     try:
         extracted_text = ""
 
-        # Processing Strategy for Text Documents
-        if filename_lower.endswith('.pdf'):
+        # Processing strategy for text documents
+        if filename_lower.endswith('.pdf', '.txt'):
             pdf_reader = PdfReader(file.file)
             for page in pdf_reader.pages:
                 page_text = page.extract_text()
@@ -139,7 +140,7 @@ async def summarize_document(
             text_bytes = await file.read()
             extracted_text = text_bytes.decode("utf-8", errors="ignore")
 
-        # Processing Strategy for Images (OCR Engine execution)
+        #Process the OCR images
         else:
             image_bytes = await file.read()
             image_object = Image.open(io.BytesIO(image_bytes))
@@ -148,12 +149,12 @@ async def summarize_document(
         if not extracted_text.strip():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The file content parsed successfully but contains no identifiable alphanumeric sequence."
+                detail="No readable text. Try upload another file or image."
             )
 
         summary = algorithm_summarize(extracted_text, num_keywords=6, instruction=instruction)
 
-        # Build clean structured production dictionary matching the dataset design
+        # Build clean structured dictionary
         note_data = {
             "title": file.filename,
             "summary": summary,
@@ -162,11 +163,10 @@ async def summarize_document(
             "source_type": "pdf_upload" if filename_lower.endswith('.pdf') else ("text_upload" if filename_lower.endswith('.txt') else "image_upload")
         }
 
-        # Safe execution using unified db driver instance instance
         doc_ref = db.collection("smart_notes").document()
         doc_ref.set(note_data)
 
-        logger.info(f"File '{file.filename}' processed successfully. Summary records cataloged under Doc ID: {doc_ref.id}")
+        logger.info(f"File '{file.filename}' processed successfully. Summary document Id: {doc_ref.id}")
         return {
             "status": "success",
             "document_id": doc_ref.id,
@@ -177,8 +177,8 @@ async def summarize_document(
     except HTTPException as http_err:
         raise http_err
     except Exception as e:
-        logger.error(f"Fatal processing failure on file execution sequence: {str(e)}")
+        logger.error(f"Error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Analysis pipeline runtime error: {str(e)}"
+            detail=f"Runtime error: {str(e)}"
         )

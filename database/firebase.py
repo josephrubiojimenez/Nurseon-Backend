@@ -2,7 +2,6 @@ import os
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# Single Source of Truth initialization block
 if not firebase_admin._apps:
     current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cert_path = os.path.join(current_dir, "nurseonServiceAccountKey.json")
