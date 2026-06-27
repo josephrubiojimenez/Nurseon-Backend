@@ -19,7 +19,6 @@ if GEMINI_API_KEY:
 class QuizGenerationPayload(BaseModel):
     uid: str
     topic: str
-    # Set default to 5, but allow numbers between 1 and 20 based on user input
     num_questions: int = Field(default=5, ge=1, le=50)
 
 def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
@@ -66,7 +65,7 @@ async def generate_quiz(payload: QuizGenerationPayload):
     slots_remaining = enforce_feature_limit(payload.uid, "quiz", max_limit=5)
 
     try:
-        # Pass the dynamic input item size explicitly to the model runner
+        
         questions_list = run_gemini_quiz_generation(payload.topic, payload.num_questions)
 
         quiz_data = {
