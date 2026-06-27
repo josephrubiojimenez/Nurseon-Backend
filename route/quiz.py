@@ -19,7 +19,7 @@ if GEMINI_API_KEY:
 class QuizGenerationPayload(BaseModel):
     uid: str
     topic: str
-    num_questions: int = Field(default=5, ge=1, le=50)
+    num_questions: int = Field(default=5, ge=1, le=20)
 
 def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
     if not GEMINI_API_KEY:
@@ -65,7 +65,7 @@ async def generate_quiz(payload: QuizGenerationPayload):
     slots_remaining = enforce_feature_limit(payload.uid, "quiz", max_limit=5)
 
     try:
-        
+
         questions_list = run_gemini_quiz_generation(payload.topic, payload.num_questions)
 
         quiz_data = {

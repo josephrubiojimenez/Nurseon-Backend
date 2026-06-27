@@ -10,7 +10,6 @@ import pytesseract
 import google.generativeai as genai
 
 from database.firebase import db
-# Import the newly created unified utility tracker
 from utils.limiters import enforce_feature_limit
 
 logger = logging.getLogger("smart_notes")
