@@ -9,6 +9,7 @@ from route.smart_notes import smart_notes_router
 from route.auth import auth_router
 from route.document import doc_router
 from route.quiz import quiz_router
+from route.case_studies import case_studies_router
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -59,6 +60,14 @@ app.include_router(
     prefix="/api/quiz",
     tags=["Quiz"]
 )
+
+# Feature - Case Studies
+app.include_router(
+    case_studies_router,
+    prefix='/api/case-studies',
+    tags=["Case Studies"]
+)
+
 # HTTP Status
 @app.get("/")
 async def root():
