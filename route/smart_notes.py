@@ -76,7 +76,6 @@ async def summarize_document(
             detail="Supported extensions for files are (.pdf, .txt) and images are (.png, .jpg, .jpeg, .jfif)."
         )
 
-    # Call the new global rate limiter with a limit of 5 for smart notes
     slots_remaining = enforce_feature_limit(uid, "smart_notes", max_limit=5)
 
     try:
