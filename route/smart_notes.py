@@ -111,7 +111,7 @@ async def summarize_document(
     try:
         extracted_text = ""
         if filename_lower.endswith(('.pdf', '.txt')):
-            if filename_lower.endswith('.pdf'):
+            if filename_lower.endswith('.pdf', '.txt'):
                 pdf_reader = PdfReader(file.file)
                 for page in pdf_reader.pages:
                     page_text = page.extract_text()
