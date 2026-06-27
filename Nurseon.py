@@ -8,6 +8,7 @@ from database.firebase import db
 from route.smart_notes import smart_notes_router
 from route.auth import auth_router
 from route.document import doc_router
+from route.quiz import quiz_router
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -52,6 +53,11 @@ app.include_router(
     tags=["Smart Notes"]
 )
 
+app.include_router(
+    quiz_router,
+    prefix="/api/quiz",
+    tags=["Quiz"]
+)
 # HTTP Status
 @app.get("/")
 async def root():
