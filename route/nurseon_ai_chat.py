@@ -10,7 +10,7 @@ import google.generativeai as genai
 from database.firebase import db
 from utils.limiters import enforce_feature_limit
 
-logger = logging.getLogger("nurseon_ai_chat_router")
+logger = logging.getLogger("nurseon_ai_router")
 nursing_ai_router = APIRouter()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
