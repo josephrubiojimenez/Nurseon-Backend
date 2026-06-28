@@ -10,7 +10,7 @@ from route.auth import auth_router
 from route.document import doc_router
 from route.quiz import quiz_router
 from route.case_studies import case_studies_router
-from route.nurseon_ai_chat import nurseon_ai_chat
+from route.nurseon_ai_chat import nurseon_ai_chat_router
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -71,7 +71,7 @@ app.include_router(
 
 # Feature - AI
 app.include_router(
-    nurseon_ai_chat, 
+    nurseon_ai_chat_router, 
     prefix='/api/nurseon-ai-chat',
     tags=["Nurseon AI"]
 )
