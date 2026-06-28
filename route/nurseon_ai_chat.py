@@ -11,7 +11,7 @@ from database.firebase import db
 from utils.limiters import enforce_feature_limit
 
 logger = logging.getLogger("nurseon_ai_router")
-nursing_ai_router = APIRouter()
+nurseon_ai_router = APIRouter()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
@@ -58,7 +58,7 @@ def run_gemini_nurseon_ai_chat(message: str) -> str:
             detail="Failed."
         )
 
-@nursing_ai_router.post("/chat", status_code=status.HTTP_200_OK)
+@nurseon_ai_router.post("/chat", status_code=status.HTTP_200_OK)
 async def nurseon_ai_chat(payload: ChatRequest):
     slots_remaining = enforce_feature_limit(payload.uid, "rate_limits", max_limit=10)
 
