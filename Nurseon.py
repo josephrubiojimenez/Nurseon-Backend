@@ -61,7 +61,7 @@ app.include_router(
     tags=["Quiz"]
 )
 
-# Feature - Case Studies
+# Feature - Case Study
 app.include_router(
     case_studies_router,
     prefix='/api/case-studies',

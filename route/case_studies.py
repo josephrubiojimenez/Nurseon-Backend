@@ -109,7 +109,7 @@ def run_gemini_evaluation(scenario: str, response_text: str) -> dict:
 
 @case_studies_router.post("/generate", status_code=status.HTTP_200_OK)
 async def generate_case_study(payload: CaseStudyPayload):
-    slots_remaining = enforce_feature_limit(payload.uid, "case_study", max_limit=5)
+    slots_remaining = enforce_feature_limit(payload.uid, "case_studies", max_limit=5)
 
     try:
         case_data_object = run_gemini_case_generation(payload.topic, payload.difficulty)
