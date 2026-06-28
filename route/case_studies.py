@@ -31,7 +31,7 @@ def run_gemini_case_generation(topic: str, difficulty: str) -> dict:
     if not GEMINI_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AI Service is currently unconfigured."
+            detail="Unconfigured."
         )
 
     model = genai.GenerativeModel("gemini-2.5-flash")
@@ -77,19 +77,25 @@ def run_gemini_evaluation(scenario: str, response_text: str) -> dict:
     model = genai.GenerativeModel("gemini-2.5-flash")
     
     system_prompt = (
-        f"Analyze this patient scenario and background context: '{scenario}'\n"
-        f"Critically evaluate the nursing student's spoken/acted intervention response: '{response_text}'.\n\n"
-        "Determine if their action is safe, professional, and within a nurse's independent or dependent scope of practice. "
-        "You MUST return ONLY a clean JSON object (no markdown formatting). Follow this exact schema layout:\n"
+        f"You are an advanced Clinical Case Evaluator. Analyze this clinical patient scenario and background context: '{scenario}'\n"
+        f"Critically evaluate the user's intervention response: '{response_text}'.\n\n"
+        "CRITICAL ROLEPLAY RULE:\n"
+        "Treat the user as the primary Professional Registered Nurse fully in charge of this patient's care. "
+        "Do NOT address them as a nursing student, do NOT evaluate them as a student, and NEVER suggest that they 'help the registered nurse' or 'defer to a senior nurse' for basic independent nursing processes. "
+        "Evaluate their actions as an autonomous, practicing professional nurse exercising independent or dependent nursing scope of practice.\n\n"
+        "Determine if their action is safe, professional, and correct according to current nursing care protocols. "
+        "You MUST return ONLY a clean JSON object (no markdown formatting, no ```json codeblocks). Follow this exact schema layout:\n"
         "{\n"
-        '  "score_percentage": 45,\n'
-        '  "clinical_rating": "Critical Safety Violation / Needs Improvement / Competent",\n'
-        '  "professional_critique": "Detailed evaluation explaining why this score was given (e.g., Giving medication before performing an assessment or checking an order profile is unsafe).",\n'
-        '  "recommended_response": "Write exactly what a professional registered nurse should have stated or done instead in this case.",\n'
-        '  "medical_references": "Provide specific textbook reference citations to help the student improve (e.g., Saunders Comprehensive Review for the NCLEX Examination or PNLE exclusively in the philippines, Lippincott Manual of Nursing Practice)."\n'
+        '  "score_percentage": 85,\n'
+        '  "clinical_rating": "Critical Safety Violation / Needs Improvement / Competent / Excellent",\n'
+        '  "professional_critique": "Detailed professional evaluation explaining why this score was given based on advanced clinical assessment, pathophysiological rationale, and protocol delegation.",\n'
+        '  "recommended_response": "Write exactly what an expert professional registered nurse should have stated or executed instead in this high-fidelity setup.",\n'
+        '  "medical_references": "Provide specific textbook reference citations to help the nurse improve (e.g., Saunders Comprehensive Review for the NCLEX Examination and PNLE Examination exclusively in the philippines, Lippincott Manual of Nursing Practice)."\n'
         "}"
     )
 
+    
+    #Cleaning JSON Text
     try:
         response = model.generate_content(system_prompt)
         clean_text = response.text.strip()
@@ -101,10 +107,10 @@ def run_gemini_evaluation(scenario: str, response_text: str) -> dict:
 
         return json.loads(clean_text)
     except Exception as e:
-        logger.error(f"Gemini Evaluation Failure: {str(e)}")
+        logger.error(f"Failed: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to compile evaluation insight grids."
+            detail="Failed."
         )
 
 @case_studies_router.post("/generate", status_code=status.HTTP_200_OK)
