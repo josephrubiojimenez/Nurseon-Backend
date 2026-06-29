@@ -75,6 +75,7 @@ def run_gemini_nurseon_ai_chat(message: str, history: list[MessageHistoryItem]) 
             clean_text = clean_text.split("\n", 1)[1].strip()
 
         return clean_text
+        
     except Exception as e:
         logger.error(f"AI Failure: {str(e)}")
         raise HTTPException(
@@ -173,7 +174,7 @@ async def rename_chat_session(uid: str, session_id: str, payload: RenameRequest)
     try:
         doc_ref = db.collection("users").document(uid).collection("nurseon_chats").document(session_id)
         if not doc_ref.get().exists:
-            raise HTTPException(status_code=404, detail="Conversation not found.")
+            raise HTTPException(status_code=44, detail="Conversation not found.")
         doc_ref.update({"title": payload.title})
         return {"status": "success"}
     except Exception as e:
