@@ -6,8 +6,6 @@ from pydantic import BaseModel
 import google.generativeai as genai
 
 from database.firebase import db
-# NOTE: Ensure your enforce_feature_limit function doesn't automatically decrement unless explicitly told to, 
-# or use a separate function to just look up the value without consuming a token.
 from utils.limiters import enforce_feature_limit 
 
 logger = logging.getLogger("nurseon_ai_router")
@@ -72,7 +70,6 @@ def run_gemini_nurseon_ai_chat(message: str, history: list[MessageHistoryItem]) 
 @nurseon_ai_router.post("/limit-check", status_code=status.HTTP_200_OK)
 async def check_ask_limit(payload: LimitCheckRequest):
     try:
-
         limit_doc_ref = db.collection("users").document(payload.uid).collection("rate_limits").document("chat_limit")
         doc = limit_doc_ref.get()
         
@@ -87,7 +84,7 @@ async def check_ask_limit(payload: LimitCheckRequest):
         return {"status": "success", "limit_remaining": slots_remaining}
     except Exception as e:
         logger.error(f"Failed to check limit securely: {str(e)}")
-        return {"status": "success", "limit_remaining": 10}
+        raise HTTPException(status_code=500, detail="Unable to fetch limit balance.")
 
 @nurseon_ai_router.post("/chat", status_code=status.HTTP_200_OK)
 async def nurseon_ai_chat(payload: ChatRequest):
