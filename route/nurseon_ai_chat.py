@@ -1,3 +1,4 @@
+# FastAPI Router (nurseon_ai_router.py)
 import os
 import logging
 from datetime import datetime, timezone
@@ -5,7 +6,6 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 import google.generativeai as genai
 
-# Firebase Firestore reference imported from your setup
 from database.firebase import db
 from utils.limiters import enforce_feature_limit
 
@@ -16,16 +16,24 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Structure matching frontend payload
 class MessageHistoryItem(BaseModel):
-    role: str  # "user" or "model"
+    role: str  
     parts: str
 
 class ChatRequest(BaseModel):
     uid: str
     message: str
-    session_id: str | None = None  # Frontend can pass this to continue an existing session
+    session_id: str | None = None 
     history: list[MessageHistoryItem] = []
+
+class RenameRequest(BaseModel):
+    title: str
+
+class PinRequest(BaseModel):
+    pinned: bool
+
+class LimitCheckRequest(BaseModel):
+    uid: str
 
 def run_gemini_nurseon_ai_chat(message: str, history: list[MessageHistoryItem]) -> str:
     if not GEMINI_API_KEY:
@@ -75,26 +83,27 @@ def run_gemini_nurseon_ai_chat(message: str, history: list[MessageHistoryItem]) 
             detail="Failed to generate AI response."
         )
 
-# --- CHAT & HISTORY ENDPOINTS ---
+@nurseon_ai_router.post("/limit-check", status_code=status.HTTP_200_OK)
+async def check_ask_limit(payload: LimitCheckRequest):
+    try:
+        slots_remaining = enforce_feature_limit(payload.uid, "rate_limits", max_limit=10)
+        return {"status": "success", "limit_remaining": slots_remaining}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @nurseon_ai_router.post("/chat", status_code=status.HTTP_200_OK)
 async def nurseon_ai_chat(payload: ChatRequest):
     slots_remaining = enforce_feature_limit(payload.uid, "rate_limits", max_limit=10)
 
     try:
-        # 1. Fire Gemini Call
         ai_reply = run_gemini_nurseon_ai_chat(payload.message, payload.history)
-
-        # 2. Database Persistence via Firebase Firestore
         user_chats_ref = db.collection("users").document(payload.uid).collection("nurseon_chats")
-        
-        # Determine if we are starting a brand new document or updating an old one
+
         if payload.session_id:
             session_doc = user_chats_ref.document(payload.session_id)
         else:
-            session_doc = user_chats_ref.document()  # Generates an automatic unique ID
+            session_doc = user_chats_ref.document()
 
-        # Build message updates
         new_messages = [
             {"role": "user", "parts": payload.message},
             {"role": "model", "parts": ai_reply}
@@ -102,7 +111,6 @@ async def nurseon_ai_chat(payload: ChatRequest):
 
         doc_snapshot = session_doc.get()
         if doc_snapshot.exists:
-            # Update existing thread array
             current_data = doc_snapshot.to_dict() or {}
             existing_messages = current_data.get("messages", [])
             session_doc.update({
@@ -111,15 +119,14 @@ async def nurseon_ai_chat(payload: ChatRequest):
             })
             session_id = payload.session_id
         else:
-            # Create brand new session context block
-            # Generate a clean short fallback title using the user's first query snippet
             generated_title = payload.message[:40] + "..." if len(payload.message) > 40 else payload.message
             
             session_doc.set({
                 "title": generated_title,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
-                "messages": new_messages
+                "messages": new_messages,
+                "pinned": False
             })
             session_id = session_doc.id
 
@@ -141,24 +148,20 @@ async def nurseon_ai_chat(payload: ChatRequest):
 
 @nurseon_ai_router.get("/history/{uid}", status_code=status.HTTP_200_OK)
 async def get_user_chat_sessions(uid: str):
-    """
-    Fetches all past chat session records metadata to populate the user's sidebar.
-    """
     try:
         sessions_ref = db.collection("users").document(uid).collection("nurseon_chats")
-        # Order by newest updates first
         docs = sessions_ref.order_by("updated_at", direction="DESCENDING").stream()
 
         sessions_list = []
         for doc in docs:
             data = doc.to_dict()
-            # Convert python datetime to uniform ISO format string for frontend handling
             formatted_date = data["updated_at"].strftime("%Y-%m-%d") if "updated_at" in data else ""
             
             sessions_list.append({
                 "id": doc.id,
                 "title": data.get("title", "Untitled Chat Case"),
-                "date": formatted_date
+                "date": formatted_date,
+                "pinned": data.get("pinned", False)
             })
 
         return {"status": "success", "sessions": sessions_list}
@@ -166,11 +169,30 @@ async def get_user_chat_sessions(uid: str):
         logger.error(f"Failed to fetch chat logs list: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to retrieve history logs.")
 
+@nurseon_ai_router.put("/history/{uid}/{session_id}/rename", status_code=status.HTTP_200_OK)
+async def rename_chat_session(uid: str, session_id: str, payload: RenameRequest):
+    try:
+        doc_ref = db.collection("users").document(uid).collection("nurseon_chats").document(session_id)
+        if not doc_ref.get().exists:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        doc_ref.update({"title": payload.title})
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@nurseon_ai_router.put("/history/{uid}/{session_id}/pin", status_code=status.HTTP_200_OK)
+async def pin_chat_session(uid: str, session_id: str, payload: PinRequest):
+    try:
+        doc_ref = db.collection("users").document(uid).collection("nurseon_chats").document(session_id)
+        if not doc_ref.get().exists:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        doc_ref.update({"pinned": payload.pinned})
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @nurseon_ai_router.get("/history/{uid}/{session_id}", status_code=status.HTTP_200_OK)
 async def get_single_session_thread(uid: str, session_id: str):
-    """
-    Loads full message array elements into focus when clicking a item in the sidebar history panel.
-    """
     try:
         doc_ref = db.collection("users").document(uid).collection("nurseon_chats").document(session_id)
         doc = doc_ref.get()
