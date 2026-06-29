@@ -72,10 +72,22 @@ def run_gemini_nurseon_ai_chat(message: str, history: list[MessageHistoryItem]) 
 @nurseon_ai_router.post("/limit-check", status_code=status.HTTP_200_OK)
 async def check_ask_limit(payload: LimitCheckRequest):
     try:
-        slots_remaining = enforce_feature_limit(payload.uid, "rate_limits", max_limit=10)
+
+        limit_doc_ref = db.collection("users").document(payload.uid).collection("rate_limits").document("chat_limit")
+        doc = limit_doc_ref.get()
+        
+        max_limit = 10
+        if doc.exists:
+            data = doc.to_dict() or {}
+            used_today = data.get("count", 0) 
+            slots_remaining = max(0, max_limit - used_today)
+        else:
+            slots_remaining = max_limit
+
         return {"status": "success", "limit_remaining": slots_remaining}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to check limit securely: {str(e)}")
+        return {"status": "success", "limit_remaining": 10}
 
 @nurseon_ai_router.post("/chat", status_code=status.HTTP_200_OK)
 async def nurseon_ai_chat(payload: ChatRequest):
