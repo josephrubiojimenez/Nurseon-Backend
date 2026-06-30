@@ -1,5 +1,6 @@
 import os
 import logging
+import json
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
@@ -36,33 +37,54 @@ def generate_board_questions(session_type: str) -> list:
         "NP III, NP IV, and NP V (Afternoon Session Focus)"
     )
 
-    system_instruction = (
-        "You are an elite Professional Nursing Board Examiner.\n\n"
-        f"Generate exactly 50 realistic board-style multiple choice questions focusing on: {scope}.\n"
-        "Return the output raw valid JSON as an array of items. Do not put markdown wrappers.\n"
-        "Each object item within the JSON array must strictly have these fields:\n"
-        "- id: sequential string integer index (e.g., \"1\", \"2\")\n"
-        "- question: clear, professional scenario context\n"
-        "- options: object containing exact keys: A, B, C, D\n"
-        "- correct_answer: single upper case character letter key\n"
-        "- rationale: clear clinical reason explaining why that answer is correct."
+    # We split 50 questions into 5 batches of 10 items to prevent token truncation
+    all_questions = []
+    questions_per_batch = 10
+    total_batches = 5
+
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash",
+        generation_config={"response_mime_type": "application/json"}
     )
 
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            system_instruction=system_instruction,
-            generation_config={"response_mime_type": "application/json"}
+    for batch_idx in range(total_batches):
+        start_id = (batch_idx * questions_per_batch) + 1
+        end_id = start_id + questions_per_batch - 1
+
+        system_instruction = (
+            "You are an elite Professional Nursing Board Examiner.\n\n"
+            f"Generate exactly {questions_per_batch} realistic board-style multiple choice questions focusing on: {scope}.\n"
+            f"Assign the structural ID sequence for this batch starting from \"{start_id}\" up to \"{end_id}\".\n"
+            "Return the output raw valid JSON as an array of items. Do not put markdown wrappers.\n"
+            "Each object item within the JSON array must strictly have these fields:\n"
+            "- id: sequential string integer index (e.g., \"1\", \"2\")\n"
+            "- question: clear, professional scenario context\n"
+            "- options: object containing exact keys: A, B, C, D\n"
+            "- correct_answer: single upper case character letter key\n"
+            "- rationale: clear clinical reason explaining why that answer is correct."
         )
-        response = model.generate_content("Generate the 50 board questions now.")
-        import json
-        return json.loads(response.text.strip())
-    except Exception as e:
-        logger.exception("AI Question Generation Failure")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate your exam session questions."
-        )
+
+        try:
+            # We recreate or update the prompt context with system instructions embedded
+            response = model.generate_content(
+                f"{system_instruction}\n\nGenerate batch {batch_idx + 1} now (Questions {start_id} to {end_id})."
+            )
+            
+            batch_data = json.loads(response.text.strip())
+            if isinstance(batch_data, list):
+                all_questions.extend(batch_data)
+            else:
+                raise ValueError("Model did not return a valid list structure for this batch.")
+                
+        except Exception as e:
+            logger.exception(f"AI Generation Failure on Batch {batch_idx + 1}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to generate exam session questions at batch {batch_idx + 1}: {str(e)}"
+            )
+
+    # Return the unified 50 items array
+    return all_questions
 
 @mock_board_exam_router.post("/start", status_code=status.HTTP_200_OK)
 async def start_mock_exam(payload: StartExamRequest):
@@ -101,9 +123,12 @@ async def start_mock_exam(payload: StartExamRequest):
             "duration_seconds": 5400, 
             "questions": client_questions
         }
+    except HTTPException as he:
+        # Pass up specific inner HTTP exceptions thrown from chunking loops
+        raise he
     except Exception as e:
         logger.error(f"Error starting exam: {str(e)}")
-        raise HTTPException(status_code=500, detail="Could not initialize your board layout instance.")
+        raise HTTPException(status_code=500, detail=f"Could not initialize layout: {str(e)}")
 
 @mock_board_exam_router.post("/submit", status_code=status.HTTP_200_OK)
 async def submit_mock_exam(payload: SubmitExamRequest):
