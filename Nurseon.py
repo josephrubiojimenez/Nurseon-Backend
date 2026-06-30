@@ -80,7 +80,7 @@ app.include_router(
 # Feature - Mock Board Exam
 app.include_router(
     mock_board_exam_router,
-    prefix='/api/mock_board_exam',
+    prefix='/api/mock-board-exam',
     tags=["Mock Exam"]
 )
 
