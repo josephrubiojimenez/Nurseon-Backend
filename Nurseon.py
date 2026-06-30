@@ -11,6 +11,7 @@ from route.document import doc_router
 from route.quiz import quiz_router
 from route.case_studies import case_studies_router
 from route.nurseon_ai_chat import nurseon_ai_router
+from route.mock_board_exam import mock_board_exam_router
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -74,6 +75,13 @@ app.include_router(
     nurseon_ai_router,
     prefix='/api/nurseon-ai',
     tags=["Nurseon AI"]
+)
+
+# Feature - Mock Board Exam
+app.include_router(
+    mock_board_exam_router,
+    prefix='/api/mock_board_exam',
+    tags=["Mock Exam"]
 )
 
 # HTTP Status
