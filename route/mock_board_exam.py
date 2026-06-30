@@ -61,7 +61,7 @@ def generate_all_100_questions() -> list:
     # Hardened prompt instructions to avoid early syntax truncation or missing keys
     prompt = (
         "You are an elite Professional Nursing Board Examiner. Generate exactly 100 realistic, high-yield multiple-choice questions "
-        "structured sequentially from ID '1' to '100'. Do not truncate, abbreviate, or stop short. Follow this distribution strictly:\n\n"
+        "structured sequentially from ID '1' to '100'. NP means Nursing Practice, NP I is about Community Health Nursing, NP II is about Maternal and Child Nursing, NP III and NP IV are all about Medical-Surgical Nursing. Lastly, NP V is all about Medical-Surgical Nursing including Psychiatric Nursing concepts. Do not truncate, abbreviate, or stop short. Follow this distribution strictly:\n\n"
         "1. Questions 1 to 30: EASY difficulty. Coverage: NP I and NP II.\n"
         "2. Questions 31 to 60: MEDIUM difficulty. Coverage: NP III.\n"
         "3. Questions 61 to 100: HARD difficulty. Coverage: NP IV and NP V.\n\n"
@@ -94,7 +94,7 @@ async def start_mock_exam(payload: StartExamRequest):
             started_at = latest_exam_data.get("started_at")
             
             if started_at:
-                cooldown_expiry = started_at + timedelta(hours=24)
+                cooldown_expiry = started_at + timedelta(seconds=0)  # hours 24
                 if now < cooldown_expiry:
                     time_remaining = cooldown_expiry - now
                     hours_left = int(time_remaining.total_seconds() // 3600)
