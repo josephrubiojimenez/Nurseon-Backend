@@ -40,7 +40,7 @@ class StartExamRequest(BaseModel):
 class SubmitExamRequest(BaseModel):
     uid: str
     exam_id: str
-    answers: dict  # Format: {"1": "A", "2": "C", ...}
+    answers: dict  # Format: {"1": "A", "2": "C", ...} Can accept partials, unshaded counts as blank.
 
 
 def generate_all_100_questions() -> list:
@@ -58,13 +58,14 @@ def generate_all_100_questions() -> list:
         }
     )
 
+    # Hardened prompt instructions to avoid early syntax truncation or missing keys
     prompt = (
         "You are an elite Professional Nursing Board Examiner. Generate exactly 100 realistic, high-yield multiple-choice questions "
-        "structured sequentially from ID '1' to '100'. Follow this distribution strictly:\n\n"
-        "1. Questions 1-30: EASY difficulty. Coverage: NP I and NP II.\n"
-        "2. Questions 31-60: MEDIUM difficulty. Coverage: NP III.\n"
-        "3. Questions 61-100: HARD difficulty. Coverage: NP IV and NP V.\n\n"
-        "Ensure options contain exact fields A, B, C, D, with valid single uppercase correct answers and robust rationales."
+        "structured sequentially from ID '1' to '100'. Do not truncate, abbreviate, or stop short. Follow this distribution strictly:\n\n"
+        "1. Questions 1 to 30: EASY difficulty. Coverage: NP I and NP II.\n"
+        "2. Questions 31 to 60: MEDIUM difficulty. Coverage: NP III.\n"
+        "3. Questions 61 to 100: HARD difficulty. Coverage: NP IV and NP V.\n\n"
+        "Ensure every single item contains unique medical contexts with fields: id, question, options (A, B, C, D), correct_answer, and rationale."
     )
 
     try:
@@ -104,7 +105,7 @@ async def start_mock_exam(payload: StartExamRequest):
                         detail=f"Feature Locked: You can only use the Mock Board Exam feature once every 24 hours. Please return in {hours_left}h {minutes_left}m."
                     )
 
-        # Generate questions if cooldown has passed
+        # Generate complete 100 question matrix if cooldown has passed
         questions = generate_all_100_questions()
         exam_doc = exams_ref.document()
         exam_id = exam_doc.id
@@ -156,18 +157,20 @@ async def submit_mock_exam(payload: SubmitExamRequest):
         secure_keys = exam_data.get("secure_answer_keys", {})
         
         score = 0
-        total_items = len(secure_keys)
+        total_items = len(secure_keys)  # Will be exactly 100
         breakdown = {}
         
+        # Iterates through all 100 securely stored correct answers
         for q_id, keys in secure_keys.items():
-            user_ans = payload.answers.get(q_id)
+            user_ans = payload.answers.get(q_id)  # Returns None if frontend skipped it or ran out of time
             correct_ans = keys.get("correct")
-            is_correct = user_ans == correct_ans
+            is_correct = user_ans == correct_ans if user_ans else False
+            
             if is_correct:
                 score += 1
                 
             breakdown[q_id] = {
-                "user_answer": user_ans,
+                "user_answer": user_ans if user_ans else "Unanswered (Locked Out)",
                 "correct_answer": correct_ans,
                 "rationale": keys.get("rationale"),
                 "is_correct": is_correct
@@ -176,6 +179,7 @@ async def submit_mock_exam(payload: SubmitExamRequest):
         submission_time = datetime.now(timezone.utc)
         release_time = submission_time + timedelta(hours=24)
         
+        # Saves evaluation metrics for the entire unified compilation
         exam_doc_ref.update({
             "status": "submitted",
             "user_submissions": payload.answers,
