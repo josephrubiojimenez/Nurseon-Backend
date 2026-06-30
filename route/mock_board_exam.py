@@ -3,10 +3,11 @@ import logging
 import json
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
-import google.generativeai as genai
+from pydantic import BaseModel, Field
+from typing import List
 
 from database.firebase import db
+import google.generativeai as genai
 
 logger = logging.getLogger("mock_board_exam")
 mock_board_exam_router = APIRouter()
@@ -15,83 +16,98 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
+# --- Pydantic Schemas for Structured AI Generation ---
+class QuestionOptionSchema(BaseModel):
+    A: str
+    B: str
+    C: str
+    D: str
+
+class QuestionSchema(BaseModel):
+    id: str = Field(description="Sequential string index from '1' up to '100'")
+    question: str = Field(description="Clear, realistic clinical nursing scenario context")
+    options: QuestionOptionSchema
+    correct_answer: str = Field(description="Single uppercase character letter: A, B, C, or D")
+    rationale: str = Field(description="Clear clinical reason explaining why that answer is correct")
+
+class UnifiedExamResponseSchema(BaseModel):
+    questions: List[QuestionSchema]
+
+# --- Request Payloads ---
 class StartExamRequest(BaseModel):
     uid: str
-    session_type: str  # "morning" or "afternoon"
 
 class SubmitExamRequest(BaseModel):
     uid: str
     exam_id: str
-    answers: dict  # Format: {"question_id": "Selected Letter"}
+    answers: dict  # Format: {"1": "A", "2": "C", ...}
 
-def generate_board_questions(session_type: str) -> list:
+
+def generate_all_100_questions() -> list:
     if not GEMINI_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="AI Core service unconfigured."
         )
 
-    scope = (
-        "NP I and NP II (Morning Session Focus)"
-        if session_type == "morning" else
-        "NP III, NP IV, and NP V (Afternoon Session Focus)"
-    )
-
-    # We split 50 questions into 5 batches of 10 items to prevent token truncation
-    all_questions = []
-    questions_per_batch = 10
-    total_batches = 5
-
     model = genai.GenerativeModel(
         model_name="gemini-2.5-flash",
-        generation_config={"response_mime_type": "application/json"}
+        generation_config={
+            "response_mime_type": "application/json",
+            "response_schema": UnifiedExamResponseSchema
+        }
     )
 
-    for batch_idx in range(total_batches):
-        start_id = (batch_idx * questions_per_batch) + 1
-        end_id = start_id + questions_per_batch - 1
+    prompt = (
+        "You are an elite Professional Nursing Board Examiner. Generate exactly 100 realistic, high-yield multiple-choice questions "
+        "structured sequentially from ID '1' to '100'. Follow this distribution strictly:\n\n"
+        "1. Questions 1-30: EASY difficulty. Coverage: NP I and NP II.\n"
+        "2. Questions 31-60: MEDIUM difficulty. Coverage: NP III.\n"
+        "3. Questions 61-100: HARD difficulty. Coverage: NP IV and NP V.\n\n"
+        "Ensure options contain exact fields A, B, C, D, with valid single uppercase correct answers and robust rationales."
+    )
 
-        system_instruction = (
-            "You are an elite Professional Nursing Board Examiner.\n\n"
-            f"Generate exactly {questions_per_batch} realistic board-style multiple choice questions focusing on: {scope}.\n"
-            f"Assign the structural ID sequence for this batch starting from \"{start_id}\" up to \"{end_id}\".\n"
-            "Return the output raw valid JSON as an array of items. Do not put markdown wrappers.\n"
-            "Each object item within the JSON array must strictly have these fields:\n"
-            "- id: sequential string integer index (e.g., \"1\", \"2\")\n"
-            "- question: clear, professional scenario context\n"
-            "- options: object containing exact keys: A, B, C, D\n"
-            "- correct_answer: single upper case character letter key\n"
-            "- rationale: clear clinical reason explaining why that answer is correct."
+    try:
+        response = model.generate_content(prompt)
+        raw_json = json.loads(response.text.strip())
+        return raw_json.get("questions", [])
+    except Exception as e:
+        logger.exception("Unified AI Exam Generation Failure")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to compile target exam items: {str(e)}"
         )
 
-        try:
-            # We recreate or update the prompt context with system instructions embedded
-            response = model.generate_content(
-                f"{system_instruction}\n\nGenerate batch {batch_idx + 1} now (Questions {start_id} to {end_id})."
-            )
-            
-            batch_data = json.loads(response.text.strip())
-            if isinstance(batch_data, list):
-                all_questions.extend(batch_data)
-            else:
-                raise ValueError("Model did not return a valid list structure for this batch.")
-                
-        except Exception as e:
-            logger.exception(f"AI Generation Failure on Batch {batch_idx + 1}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to generate exam session questions at batch {batch_idx + 1}: {str(e)}"
-            )
-
-    # Return the unified 50 items array
-    return all_questions
 
 @mock_board_exam_router.post("/start", status_code=status.HTTP_200_OK)
 async def start_mock_exam(payload: StartExamRequest):
     try:
-        questions = generate_board_questions(payload.session_type)
-        exam_ref = db.collection("users").document(payload.uid).collection("mock_board_exams").document()
-        exam_id = exam_ref.id
+        exams_ref = db.collection("users").document(payload.uid).collection("unified_board_exams")
+        
+        # --- Rolling 24-Hour Feature Lockout Guard ---
+        latest_exam_query = exams_ref.order_by("started_at", direction="DESCENDING").limit(1).get()
+        now = datetime.now(timezone.utc)
+        
+        if len(latest_exam_query) > 0:
+            latest_exam_data = latest_exam_query[0].to_dict()
+            started_at = latest_exam_data.get("started_at")
+            
+            if started_at:
+                cooldown_expiry = started_at + timedelta(hours=24)
+                if now < cooldown_expiry:
+                    time_remaining = cooldown_expiry - now
+                    hours_left = int(time_remaining.total_seconds() // 3600)
+                    minutes_left = int((time_remaining.total_seconds() % 3600) // 60)
+                    
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"Feature Locked: You can only use the Mock Board Exam feature once every 24 hours. Please return in {hours_left}h {minutes_left}m."
+                    )
+
+        # Generate questions if cooldown has passed
+        questions = generate_all_100_questions()
+        exam_doc = exams_ref.document()
+        exam_id = exam_doc.id
         
         client_questions = []
         secure_keys = {}
@@ -107,11 +123,9 @@ async def start_mock_exam(payload: StartExamRequest):
                 "rationale": q.get("rationale")
             }
             
-        start_time = datetime.now(timezone.utc)
-        exam_ref.set({
+        exam_doc.set({
             "exam_id": exam_id,
-            "session_type": payload.session_type,
-            "started_at": start_time,
+            "started_at": now,
             "status": "ongoing",
             "questions_data": client_questions,
             "secure_answer_keys": secure_keys
@@ -120,24 +134,23 @@ async def start_mock_exam(payload: StartExamRequest):
         return {
             "status": "success",
             "exam_id": exam_id,
-            "duration_seconds": 5400, 
             "questions": client_questions
         }
     except HTTPException as he:
-        # Pass up specific inner HTTP exceptions thrown from chunking loops
         raise he
     except Exception as e:
-        logger.error(f"Error starting exam: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Could not initialize layout: {str(e)}")
+        logger.error(f"Error starting workspace session: {str(e)}")
+        raise HTTPException(status_code=500, detail="Could not initialize board workspace.")
+
 
 @mock_board_exam_router.post("/submit", status_code=status.HTTP_200_OK)
 async def submit_mock_exam(payload: SubmitExamRequest):
     try:
-        exam_doc_ref = db.collection("users").document(payload.uid).collection("mock_board_exams").document(payload.exam_id)
+        exam_doc_ref = db.collection("users").document(payload.uid).collection("unified_board_exams").document(payload.exam_id)
         doc = exam_doc_ref.get()
         
         if not doc.exists:
-            raise HTTPException(status_code=404, detail="Target exam track missing.")
+            raise HTTPException(status_code=404, detail="Target exam snapshot missing.")
             
         exam_data = doc.to_dict() or {}
         secure_keys = exam_data.get("secure_answer_keys", {})
@@ -175,39 +188,8 @@ async def submit_mock_exam(payload: SubmitExamRequest):
         
         return {
             "status": "success",
-            "message": "Exam saved securely. Scores deferred for 24 hours.",
             "release_at": release_time.isoformat()
         }
     except Exception as e:
         logger.error(f"Submission pipeline crashed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to save exam choices.")
-
-@mock_board_exam_router.get("/status/{uid}", status_code=status.HTTP_200_OK)
-async def get_exam_status_history(uid: str):
-    try:
-        exams_ref = db.collection("users").document(uid).collection("mock_board_exams")
-        docs = exams_ref.order_by("started_at", direction="DESCENDING").stream()
-        history = []
-        now = datetime.now(timezone.utc)
-        
-        for doc in docs:
-            data = doc.to_dict()
-            release_at = data.get("score_release_at")
-            is_released = False
-            
-            if release_at:
-                release_dt = datetime.fromisoformat(release_at.replace("Z", "+00:00")) if isinstance(release_at, str) else release_at
-                is_released = now >= release_dt
-
-            history.append({
-                "exam_id": data.get("exam_id"),
-                "session_type": data.get("session_type"),
-                "status": data.get("status"),
-                "started_at": data.get("started_at"),
-                "is_score_available": is_released,
-                "score": data.get("calculated_score") if is_released else None,
-                "total_items": data.get("total_items") if is_released else None
-            })
-        return {"status": "success", "history": history}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Could not retrieve status matrix.")
+        raise HTTPException(status_code=500, detail="Failed to secure your exam choices.")
