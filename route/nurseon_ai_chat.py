@@ -63,9 +63,13 @@ def run_gemini_nurseon_ai_chat(message: str, history: list[MessageHistoryItem]) 
             clean_text = clean_text.split("\n", 1)[1].strip()
 
         return clean_text
+
     except Exception as e:
-        logger.error(f"AI Failure: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to generate AI response.")
+        logger.exception("AI Failure")
+        raise HTTPException(
+        status_code=500,
+        detail=str(e)
+    )
 
 @nurseon_ai_router.post("/limit-check", status_code=status.HTTP_200_OK)
 async def check_ask_limit(payload: LimitCheckRequest):
