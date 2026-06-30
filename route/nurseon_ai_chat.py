@@ -38,7 +38,7 @@ def run_gemini_nurseon_ai_chat(message: str, history: list[MessageHistoryItem]) 
     if not GEMINI_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AI Service is currently unconfigured."
+            detail="AI Service is currently unconfigured. Please check back later."
         )
 
     system_instruction = (
@@ -66,10 +66,20 @@ def run_gemini_nurseon_ai_chat(message: str, history: list[MessageHistoryItem]) 
 
     except Exception as e:
         logger.exception("AI Failure")
+        error_msg = str(e)
+        
+        # Friendly handling for Gemini Quota / Rate Limits
+        if "429" in error_msg or "Quota exceeded" in error_msg or "ResourceExhausted" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="The AI is a bit busy right now due to server limits. Please wait a minute and try your question again!"
+            )
+        
+        # Generic fallback for any other structural API errors
         raise HTTPException(
-        status_code=500,
-        detail=str(e)
-    )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Something went wrong while speaking with the AI. Please try sending your message again shortly."
+        )
 
 @nurseon_ai_router.post("/limit-check", status_code=status.HTTP_200_OK)
 async def check_ask_limit(payload: LimitCheckRequest):
@@ -88,7 +98,7 @@ async def check_ask_limit(payload: LimitCheckRequest):
         return {"status": "success", "limit_remaining": slots_remaining}
     except Exception as e:
         logger.error(f"Failed to check limit securely: {str(e)}")
-        raise HTTPException(status_code=500, detail="Unable to fetch limit balance.")
+        raise HTTPException(status_code=500, detail="Unable to fetch your remaining query balance.")
 
 @nurseon_ai_router.post("/chat", status_code=status.HTTP_200_OK)
 async def nurseon_ai_chat(payload: ChatRequest):
