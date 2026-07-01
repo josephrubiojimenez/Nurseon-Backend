@@ -1,30 +1,21 @@
 import os
 import logging
 import json
-import hashlib
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, status, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import List
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
 
 from database.firebase import db
-import google.generativeai as genai
+from google import genai
 
 logger = logging.getLogger("mock_board_exam")
 mock_board_exam_router = APIRouter()
 
-# Rate limiter setup
-limiter = Limiter(key_func=get_remote_address)
-mock_board_exam_router.state.limiter = limiter
-
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+genai_client = None
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # --- Pydantic Schemas for Structured AI Generation ---
 class QuestionOptionSchema(BaseModel):
@@ -61,19 +52,11 @@ class ResetExamEntirelyRequest(BaseModel):
 
 
 def generate_all_100_questions() -> list:
-    if not GEMINI_API_KEY:
+    if not genai_client:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="AI Core service unconfigured."
         )
-
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        generation_config={
-            "response_mime_type": "application/json",
-            "response_schema": UnifiedExamResponseSchema
-        }
-    )
 
     # Hardened prompt instructions to avoid early syntax truncation or missing keys
     prompt = (
@@ -82,12 +65,20 @@ def generate_all_100_questions() -> list:
         "1. Questions 1 to 30: EASY difficulty. Coverage: NP I and NP II.\n"
         "2. Questions 31 to 60: MEDIUM difficulty. Coverage: NP III.\n"
         "3. Questions 61 to 100: HARD difficulty. Coverage: NP IV and NP V.\n\n"
-        "Ensure every single item contains unique medical contexts with fields: id, question, options (A, B, C, D), correct_answer, and rationale."
+        "Ensure every single item contains unique medical contexts with fields: id, question, options (A, B, C, D), correct_answer, and rationale.\n\n"
+        "Return ONLY valid JSON with this structure: {\"questions\": [{\"id\": \"1\", \"question\": \"...\", \"options\": {\"A\": \"...\", \"B\": \"...\", \"C\": \"...\", \"D\": \"...\"}, \"correct_answer\": \"A\", \"rationale\": \"...\"}]}"
     )
 
     try:
-        response = model.generate_content(prompt)
-        raw_json = json.loads(response.text.strip())
+        response = genai_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        
+        # Extract JSON from response
+        response_text = response.text.strip()
+        # Try to parse the JSON
+        raw_json = json.loads(response_text)
         return raw_json.get("questions", [])
     except Exception as e:
         logger.exception("Unified AI Exam Generation Failure")
@@ -138,8 +129,43 @@ def cache_exam_questions(uid: str, questions: list, exam_id: str) -> None:
 
 
 @mock_board_exam_router.post("/start", status_code=status.HTTP_200_OK)
-@limiter.limit("1/hour")  # Rate limit: 1 exam generation per hour per IP
 async def start_mock_exam(request: Request, payload: StartExamRequest):
+    # Rate limit: 1 exam generation per hour per IP
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Simple in-memory rate limiting check
+    current_time = datetime.now(timezone.utc)
+    rate_limit_key = f"rate_limit:{client_ip}"
+    
+    # Check rate limit (1 hour cooldown)
+    try:
+        last_request_str = db.collection("rate_limits").document(rate_limit_key).get()
+        if last_request_str.exists:
+            last_request_data = last_request_str.to_dict()
+            last_request_time = last_request_data.get("timestamp")
+            
+            if last_request_time:
+                time_since_last = (current_time - last_request_time.replace(tzinfo=timezone.utc)).total_seconds()
+                if time_since_last < 3600:  # Less than 1 hour
+                    minutes_remaining = int((3600 - time_since_last) / 60)
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail=f"You are generating exams too quickly. Please wait {minutes_remaining} minutes before trying again.",
+                        headers={"Retry-After": str(3600 - int(time_since_last))}
+                    )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Rate limit check error: {str(e)}")
+    
+    # Record this request
+    try:
+        db.collection("rate_limits").document(rate_limit_key).set({
+            "timestamp": current_time,
+            "ip": client_ip
+        })
+    except Exception as e:
+        logger.error(f"Rate limit recording error: {str(e)}")
     try:
         uid = payload.uid
         exams_ref = db.collection("users").document(uid).collection("unified_board_exams")
