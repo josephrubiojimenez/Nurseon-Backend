@@ -1,6 +1,7 @@
 import os
 import logging
 import json
+import hashlib
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Form, status
 from pydantic import BaseModel, Field
@@ -32,7 +33,7 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
     
     system_prompt = (
         "You are an expert Nursing Board Exam (NCLEX) Quiz Creator. Create a highly accurate "
-        f"multiple-choice quiz consisting of exactly {num_questions} questions about the requested topic.\n\n"
+        "multiple-choice quiz consisting of exactly {num_questions} questions about the requested topic.\n\n"
         "You MUST return ONLY a clean JSON array (no markdown code blocks, no ```json formatting wrappers). "
         "Each object in the array must follow this exact schema:\n"
         "{\n"
@@ -44,7 +45,7 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
     )
 
     try:
-        response = model.generate_content(system_prompt + f"\n\nTopic: {topic}")
+        response = model.generate_content(system_prompt.format(num_questions=num_questions) + f"\n\nTopic: {topic}")
         clean_text = response.text.strip()
         
         if clean_text.startswith("```"):
@@ -54,32 +55,78 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
 
         return json.loads(clean_text)
     except Exception as e:
-        logger.error(f"Gemini Quiz Parsing Failure: {str(e)}")
+        logger.error(f"Gemini Quiz Parsing/API Failure: {str(e)}")
+        if "429" in str(e) or "quota" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="The quiz generation engine is temporarily saturated. Please try again in 1 minute."
+            )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to generate a cleanly structured quiz layout."
+            detail="Failed to generate a cleanly structured quiz layout from the AI platform."
         )
 
 @quiz_router.post("/generate", status_code=status.HTTP_200_OK)
 async def generate_quiz(payload: QuizGenerationPayload):
+    # 1. ENFORCE LIMITER BEFORE ALL ACTIONS
     slots_remaining = enforce_feature_limit(payload.uid, "quiz", max_limit=5)
 
     try:
+        # 2. CREATE A UNIQUE CACHE FINGERPRINT
+        clean_topic = payload.topic.strip().lower()
+        quiz_fingerprint = hashlib.md5(f"{clean_topic}_{payload.num_questions}".encode('utf-8')).hexdigest()
 
+        # 3. ATTEMPT CACHE QUERY LOOKUP
+        cache_doc = db.collection("quizzes_cache").document(quiz_fingerprint).get()
+
+        if cache_doc.exists:
+            cached_quiz = cache_doc.to_dict()
+            logger.info(f"Quiz Cache Hit! Serving topic: '{payload.topic}' with {payload.num_questions} items.")
+
+            # Record this event in the user's specific generation history
+            user_quiz_record = {
+                "user_uid": payload.uid,
+                "topic": payload.topic,
+                "questions": cached_quiz["questions"],
+                "created_at": datetime.now(timezone.utc),
+                "source": "cache"
+            }
+            db.collection("generated_quizzes").document().set(user_quiz_record)
+
+            return {
+                "status": "success",
+                "is_cached": True,
+                "quiz_id": cache_doc.id,
+                "topic": payload.topic,
+                "questions": cached_quiz["questions"],
+                "slots_remaining": slots_remaining
+            }
+
+        # 4. CACHE MISS -> CALL GEMINI AI
         questions_list = run_gemini_quiz_generation(payload.topic, payload.num_questions)
 
         quiz_data = {
             "user_uid": payload.uid,
             "topic": payload.topic,
             "questions": questions_list,
-            "created_at": datetime.now(timezone.utc)
+            "created_at": datetime.now(timezone.utc),
+            "source": "gemini_generation"
         }
 
+        # Save to user collection history
         doc_ref = db.collection("generated_quizzes").document()
         doc_ref.set(quiz_data)
 
+        # Write data to global cache so future matching requests bypass Gemini
+        db.collection("quizzes_cache").document(quiz_fingerprint).set({
+            "topic": clean_topic,
+            "questions": questions_list,
+            "cached_at": datetime.now(timezone.utc)
+        })
+
         return {
             "status": "success",
+            "is_cached": False,
             "quiz_id": doc_ref.id,
             "topic": quiz_data["topic"],
             "questions": questions_list,
@@ -92,5 +139,5 @@ async def generate_quiz(payload: QuizGenerationPayload):
         logger.error(f"Quiz runtime crash: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal application error generating the quiz."
+            detail="Internal application error generating the quiz layout."
         )

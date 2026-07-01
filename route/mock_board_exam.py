@@ -1,16 +1,26 @@
 import os
 import logging
 import json
+import hashlib
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import List
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from database.firebase import db
 import google.generativeai as genai
 
 logger = logging.getLogger("mock_board_exam")
 mock_board_exam_router = APIRouter()
+
+# Rate limiter setup
+limiter = Limiter(key_func=get_remote_address)
+mock_board_exam_router.state.limiter = limiter
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
@@ -87,14 +97,89 @@ def generate_all_100_questions() -> list:
         )
 
 
-@mock_board_exam_router.post("/start", status_code=status.HTTP_200_OK)
-async def start_mock_exam(payload: StartExamRequest):
+def get_cached_exam_questions(uid: str) -> tuple[list, str] | None:
+    """Check if there's a cached exam for this user that's still valid (within 24 hours)"""
     try:
-        exams_ref = db.collection("users").document(payload.uid).collection("unified_board_exams")
+        exams_ref = db.collection("users").document(uid).collection("unified_board_exams")
+        latest_exam_query = exams_ref.order_by("started_at", direction="DESCENDING").limit(1).get()
+        
+        if len(latest_exam_query) > 0:
+            latest_exam_data = latest_exam_query[0].to_dict()
+            started_at = latest_exam_data.get("started_at")
+            questions_data = latest_exam_data.get("questions_data")
+            exam_id = latest_exam_query[0].id
+            
+            if started_at and questions_data:
+                # Check if exam is still within 24-hour window
+                now = datetime.now(timezone.utc)
+                cooldown_expiry = started_at + timedelta(hours=24)
+                
+                if now < cooldown_expiry:
+                    return questions_data, exam_id
+    except Exception as e:
+        logger.error(f"Error checking cached exam: {str(e)}")
+    
+    return None
+
+
+def cache_exam_questions(uid: str, questions: list, exam_id: str) -> None:
+    """Cache generated questions to database for reuse"""
+    try:
+        exams_ref = db.collection("users").document(uid).collection("unified_board_exams")
+        exam_doc_ref = exams_ref.document(exam_id)
+        
+        # Update the document with questions_data if not already present
+        exam_doc_ref.update({
+            "questions_data": questions,
+            "cached_at": datetime.now(timezone.utc)
+        })
+    except Exception as e:
+        logger.error(f"Error caching exam questions: {str(e)}")
+
+
+@mock_board_exam_router.post("/start", status_code=status.HTTP_200_OK)
+@limiter.limit("1/hour")  # Rate limit: 1 exam generation per hour per IP
+async def start_mock_exam(request: Request, payload: StartExamRequest):
+    try:
+        uid = payload.uid
+        exams_ref = db.collection("users").document(uid).collection("unified_board_exams")
+        now = datetime.now(timezone.utc)
+        
+        # --- Check for cached exam questions first ---
+        cached_result = get_cached_exam_questions(uid)
+        if cached_result:
+            cached_questions, cached_exam_id = cached_result
+            
+            # Create new exam session with cached questions
+            exam_doc = exams_ref.document()
+            new_exam_id = exam_doc.id
+            
+            # Prepare secure keys (we need to get them from the cached exam)
+            cached_exam_ref = db.collection("users").document(uid).collection("unified_board_exams").document(cached_exam_id)
+            cached_exam_data = cached_exam_ref.get().to_dict()
+            secure_keys = cached_exam_data.get("secure_answer_keys", {})
+            
+            exam_doc.set({
+                "exam_id": new_exam_id,
+                "started_at": now,
+                "status": "ongoing",
+                "questions_data": cached_questions,
+                "secure_answer_keys": secure_keys,
+                "from_cache": True
+            })
+            
+            logger.info(f"Using cached exam questions for user {uid}")
+            
+            return {
+                "status": "success",
+                "exam_id": new_exam_id,
+                "questions": cached_questions,
+                "slots_remaining": 0,
+                "cached": True
+            }
         
         # --- Rolling 24-Hour Feature Lockout Guard ---
         latest_exam_query = exams_ref.order_by("started_at", direction="DESCENDING").limit(1).get()
-        now = datetime.now(timezone.utc)
         
         if len(latest_exam_query) > 0:
             latest_exam_data = latest_exam_query[0].to_dict()
@@ -140,11 +225,17 @@ async def start_mock_exam(payload: StartExamRequest):
             "secure_answer_keys": secure_keys
         })
         
+        # Cache the questions for future use
+        cache_exam_questions(uid, client_questions, exam_id)
+        
+        logger.info(f"Generated new exam questions for user {uid}")
+        
         return {
             "status": "success",
             "exam_id": exam_id,
             "questions": client_questions,
-            "slots_remaining": 0
+            "slots_remaining": 0,
+            "cached": False
         }
     except HTTPException as he:
         raise he

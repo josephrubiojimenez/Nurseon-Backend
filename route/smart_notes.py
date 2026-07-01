@@ -1,6 +1,7 @@
 import io
 import os
 import logging
+import hashlib
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, status
@@ -19,7 +20,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 else:
-    logger.error("Missing api key.")
+    logger.error("Missing API key.")
 
 if os.name == 'nt':
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
@@ -51,9 +52,14 @@ def run_gemini_ai_summary(full_text: str, custom_instruction: str = "") -> str:
         return response.text if response.text else "Failed to deliver structured text. Please upload another file or image."
     except Exception as ai_err:
         logger.error(f"Gemini API Error: {str(ai_err)}")
+        if "429" in str(ai_err) or "quota" in str(ai_err).lower():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="The AI generation engine is temporarily saturated. Please try again in 1 minute."
+            )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed."
+            detail="AI platform processing failed. Please try again later."
         )
 
 
@@ -64,7 +70,6 @@ async def summarize_document(
     instruction: str = Form("")
 ):
     filename_lower = file.filename.lower()
-    
     text_extensions = {'.pdf', '.txt'}
     image_extensions = {'.png', '.jpg', '.jpeg', '.jfif'}
     allowed_extensions = text_extensions.union(image_extensions)
@@ -75,9 +80,11 @@ async def summarize_document(
             detail="Supported extensions for files are (.pdf, .txt) and images are (.png, .jpg, .jpeg, .jfif)."
         )
 
+    # 1. ENFORCE APP RATE LIMITER FIRST
     slots_remaining = enforce_feature_limit(uid, "smart_notes", max_limit=5)
 
     try:
+        # 2. EXTRACT TEXT FROM DOCUMENT/IMAGE
         extracted_text = ""
         if filename_lower.endswith(('.pdf', '.txt')):
             if filename_lower.endswith('.pdf'):
@@ -89,7 +96,6 @@ async def summarize_document(
             else:
                 text_bytes = await file.read()
                 extracted_text = text_bytes.decode("utf-8", errors="ignore")
-
         else:
             image_bytes = await file.read()
             image_object = Image.open(io.BytesIO(image_bytes))
@@ -101,8 +107,40 @@ async def summarize_document(
                 detail="No readable text found. Please upload a clearer file or image."
             )
 
+        # 3. DATABASE CACHE CHECK (Step 3: Cache Common Content)
+        # Create a unique fingerprint hash of the combined text and custom prompt
+        clean_instruction = instruction.strip().lower()
+        content_fingerprint = hashlib.md5(f"{extracted_text.strip()}_{clean_instruction}".encode('utf-8')).hexdigest()
+        
+        cache_query = db.collection("smart_notes_cache").document(content_fingerprint).get()
+        
+        if cache_query.exists:
+            cached_data = cache_query.to_dict()
+            logger.info(f"Cache Hit! Serving saved summary for fingerprint: {content_fingerprint}")
+            
+            # Save a log of this user interaction to their personal history
+            user_history_data = {
+                "user_uid": uid,
+                "title": file.filename,
+                "summary": cached_data["summary"],
+                "custom_instruction": instruction.strip() or None,
+                "created_at": datetime.now(timezone.utc),
+                "source_type": "cached_delivery"
+            }
+            db.collection("smart_notes").document().set(user_history_data)
+            
+            return {
+                "status": "success",
+                "is_cached": True,
+                "title": file.filename,
+                "summary": cached_data["summary"],
+                "slots_remaining": slots_remaining
+            }
+
+        # 4. CACHE MISS -> CALL GOOGLE GEMINI API
         ai_smart_notes = run_gemini_ai_summary(extracted_text, custom_instruction=instruction)
 
+        # 5. WRITE TO DB (Save to user history AND update global Cache document)
         note_data = {
             "user_uid": uid,
             "title": file.filename,
@@ -111,13 +149,22 @@ async def summarize_document(
             "created_at": datetime.now(timezone.utc),
             "source_type": "pdf_upload" if filename_lower.endswith('.pdf') else ("text_upload" if filename_lower.endswith('.txt') else "image_upload")
         }
-
+        
+        # Save user record
         doc_ref = db.collection("smart_notes").document()
         doc_ref.set(note_data)
+        
+        # Write to global cache so the next user doesn't hit Gemini for this exact document
+        db.collection("smart_notes_cache").document(content_fingerprint).set({
+            "summary": ai_smart_notes,
+            "cached_at": datetime.now(timezone.utc)
+        })
 
-        logger.info(f"File '{file.filename}' processed via Gemini. Document ID: {doc_ref.id}")
+        logger.info(f"File '{file.filename}' compiled via Gemini. Cache updated.")
+        
         return {
             "status": "success",
+            "is_cached": False,
             "document_id": doc_ref.id,
             "title": note_data["title"],
             "summary": ai_smart_notes,
@@ -130,5 +177,5 @@ async def summarize_document(
         logger.error(f"Runtime Processing Failure: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal script crash: {str(e)}"
+            detail=f"Internal system service interruption: {str(e)}"
         )
