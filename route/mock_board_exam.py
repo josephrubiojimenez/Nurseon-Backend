@@ -94,7 +94,7 @@ async def start_mock_exam(payload: StartExamRequest):
             started_at = latest_exam_data.get("started_at")
             
             if started_at:
-                cooldown_expiry = started_at + timedelta(seconds=0)  # hours 24
+                cooldown_expiry = started_at + timedelta(hours=24)
                 if now < cooldown_expiry:
                     time_remaining = cooldown_expiry - now
                     hours_left = int(time_remaining.total_seconds() // 3600)
@@ -102,7 +102,8 @@ async def start_mock_exam(payload: StartExamRequest):
                     
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"Feature Locked: You can only use the Mock Board Exam feature once every 24 hours. Please return in {hours_left}h {minutes_left}m."
+                        detail=f"Feature Locked: You can only use the Mock Board Exam feature once every 24 hours. Please return in {hours_left}h {minutes_left}m.",
+                        headers={"X-Slots-Remaining": "0"}
                     )
 
         # Generate complete 100 question matrix if cooldown has passed
@@ -135,7 +136,8 @@ async def start_mock_exam(payload: StartExamRequest):
         return {
             "status": "success",
             "exam_id": exam_id,
-            "questions": client_questions
+            "questions": client_questions,
+            "slots_remaining": 0
         }
     except HTTPException as he:
         raise he
@@ -177,7 +179,7 @@ async def submit_mock_exam(payload: SubmitExamRequest):
             }
             
         submission_time = datetime.now(timezone.utc)
-        release_time = submission_time + timedelta(hours=24)
+        release_time = submission_time + timedelta(seconds=0)
         
         # Saves evaluation metrics for the entire unified compilation
         exam_doc_ref.update({
