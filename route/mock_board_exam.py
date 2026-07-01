@@ -46,6 +46,9 @@ class ResetScoreReleaseRequest(BaseModel):
     uid: str
     exam_id: str
 
+class ResetExamEntirelyRequest(BaseModel):
+    uid: str
+
 
 def generate_all_100_questions() -> list:
     if not GEMINI_API_KEY:
@@ -149,6 +152,30 @@ async def start_mock_exam(payload: StartExamRequest):
         logger.error(f"Error starting workspace session: {str(e)}")
         raise HTTPException(status_code=500, detail="Could not initialize board workspace.")
 
+
+@mock_board_exam_router.post("/reset-exam-entirely", status_code=status.HTTP_200_OK)
+async def reset_exam_entirely(payload: ResetExamEntirelyRequest):
+    try:
+        exams_ref = db.collection("users").document(payload.uid).collection("unified_board_exams")
+        
+        # Delete all exam documents for this user
+        exams = exams_ref.get()
+        batch = db.batch()
+        
+        for exam_doc in exams:
+            batch.delete(exam_doc.reference)
+        
+        batch.commit()
+        
+        return {
+            "status": "success",
+            "message": "All exam data has been reset. You can now start a new exam."
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Full exam reset failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to reset exam data.")
 
 @mock_board_exam_router.post("/reset-score-release", status_code=status.HTTP_200_OK)
 async def reset_score_release(payload: ResetScoreReleaseRequest):
