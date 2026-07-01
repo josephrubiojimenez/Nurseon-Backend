@@ -20,8 +20,10 @@ if current_dir not in sys.path:
 app = FastAPI()
 
 origins = [
-    "http://localhost:5173",      # Local Vite dev server
+    "http://localhost:5173",      # Local Vite dev server (older default)
     "http://127.0.0.1:5173",     # Local Vite dev server alternative
+    "http://localhost:5174",      # Vite may choose alternate port (seen during dev)
+    "http://127.0.0.1:5174",
     "http://localhost:3000",      # Local React standard port
     "http://127.0.0.1:3000",
     "https://nurseon.vercel.app", 
