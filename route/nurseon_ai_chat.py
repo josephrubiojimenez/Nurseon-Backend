@@ -84,14 +84,19 @@ def run_gemini_nurseon_ai_chat(message: str, history: list[MessageHistoryItem]) 
 @nurseon_ai_router.post("/limit-check", status_code=status.HTTP_200_OK)
 async def check_ask_limit(payload: LimitCheckRequest):
     try:
-        limit_doc_ref = db.collection("users").document(payload.uid).collection("rate_limits").document("chat_limit")
-        doc = limit_doc_ref.get()
+        # Use the same document path as enforce_feature_limit: {uid}_rate_limits
+        rate_limit_ref = db.collection("rate_limits").document(f"{payload.uid}_rate_limits")
+        doc = rate_limit_ref.get()
         
         max_limit = 10
+        now = datetime.now(timezone.utc)
+        twenty_four_hours_ago = now - timedelta(days=1)
+        
         if doc.exists:
             data = doc.to_dict() or {}
-            used_today = data.get("count", 0) 
-            slots_remaining = max(0, max_limit - used_today)
+            timestamps = [t if t.tzinfo else t.replace(tzinfo=timezone.utc) for t in data.get("uploads", [])]
+            valid_timestamps = [t for t in timestamps if t > twenty_four_hours_ago]
+            slots_remaining = max(0, max_limit - len(valid_timestamps))
         else:
             slots_remaining = max_limit
 
