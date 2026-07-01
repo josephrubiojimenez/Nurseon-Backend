@@ -94,7 +94,7 @@ async def start_mock_exam(payload: StartExamRequest):
             started_at = latest_exam_data.get("started_at")
             
             if started_at:
-                cooldown_expiry = started_at + timedelta(hours=24)
+                cooldown_expiry = started_at + timedelta(seconds=0)
                 if now < cooldown_expiry:
                     time_remaining = cooldown_expiry - now
                     hours_left = int(time_remaining.total_seconds() // 3600)
