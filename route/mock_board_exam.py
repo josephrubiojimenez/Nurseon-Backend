@@ -42,6 +42,10 @@ class SubmitExamRequest(BaseModel):
     exam_id: str
     answers: dict  # Format: {"1": "A", "2": "C", ...} Can accept partials, unshaded counts as blank.
 
+class ResetScoreReleaseRequest(BaseModel):
+    uid: str
+    exam_id: str
+
 
 def generate_all_100_questions() -> list:
     if not GEMINI_API_KEY:
@@ -94,7 +98,7 @@ async def start_mock_exam(payload: StartExamRequest):
             started_at = latest_exam_data.get("started_at")
             
             if started_at:
-                cooldown_expiry = started_at + timedelta(seconds=0)
+                cooldown_expiry = started_at + timedelta(hours=24)
                 if now < cooldown_expiry:
                     time_remaining = cooldown_expiry - now
                     hours_left = int(time_remaining.total_seconds() // 3600)
@@ -145,6 +149,33 @@ async def start_mock_exam(payload: StartExamRequest):
         logger.error(f"Error starting workspace session: {str(e)}")
         raise HTTPException(status_code=500, detail="Could not initialize board workspace.")
 
+
+@mock_board_exam_router.post("/reset-score-release", status_code=status.HTTP_200_OK)
+async def reset_score_release(payload: ResetScoreReleaseRequest):
+    try:
+        exam_doc_ref = db.collection("users").document(payload.uid).collection("unified_board_exams").document(payload.exam_id)
+        doc = exam_doc_ref.get()
+        
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Exam not found.")
+        
+        # Reset score release to now (immediate access)
+        immediate_release = datetime.now(timezone.utc)
+        
+        exam_doc_ref.update({
+            "score_release_at": immediate_release
+        })
+        
+        return {
+            "status": "success",
+            "message": "Score countdown reset. Results are now available.",
+            "release_at": immediate_release.isoformat()
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"Score reset failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to reset score countdown.")
 
 @mock_board_exam_router.post("/submit", status_code=status.HTTP_200_OK)
 async def submit_mock_exam(payload: SubmitExamRequest):
