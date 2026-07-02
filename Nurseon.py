@@ -19,7 +19,7 @@ from route.quiz import quiz_router
 from route.case_studies import case_studies_router
 
 # Import the router alongside its internal instantiated limiter configuration instance
-from route.nurseon_ai_chat import nurseon_ai_router, limiter
+from route.nurseon_ai_chat import nurseon_ai_chat_router, limiter
 from route.mock_board_exam import mock_board_exam_router
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
