@@ -18,6 +18,7 @@ from route.auth import auth_router
 from route.document import doc_router
 from route.quiz import quiz_router
 from route.case_studies import case_studies_router
+from route.progress import progress_router
 
 # Import the router alongside its internal instantiated limiter configuration instance
 from route.nurseon_ai_chat import nurseon_ai_chat_router, limiter
@@ -105,6 +106,12 @@ app.include_router(
     mock_board_exam_router,
     prefix='/api/mock-board-exam',
     tags=["Mock Exam"]
+)
+
+app.include_router(
+    progress_router,
+    prefix="/api/progress",
+    tags=["Progress"]
 )
 
 # HTTP Status
