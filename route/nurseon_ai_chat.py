@@ -194,6 +194,30 @@ async def get_chat_history(uid: str):
         raise HTTPException(status_code=500, detail="Failed to load chat history threads.")
 
 
+@nurseon_ai_chat_router.get("/history/{uid}/{session_id}", status_code=status.HTTP_200_OK)
+async def get_single_session(uid: str, session_id: str):
+    try:
+        session_ref = db.collection("users").document(uid).collection("chat_sessions").document(session_id)
+        doc = session_ref.get()
+
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Session not found.")
+
+        data = doc.to_dict()
+        return {
+            "status": "success",
+            "id": data.get("id", doc.id),
+            "title": data.get("title", "Untitled"),
+            "date": data.get("date", ""),
+            "pinned": data.get("pinned", False),
+            "messages": data.get("messages", [])
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch session {session_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Could not pull your conversation log right now.")
+
 @nurseon_ai_chat_router.put("/history/{uid}/{session_id}/pin", status_code=status.HTTP_200_OK)
 async def toggle_pin_status(uid: str, session_id: str, payload: dict):
     try:

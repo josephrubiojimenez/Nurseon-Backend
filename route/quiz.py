@@ -108,7 +108,7 @@ def get_user_quiz_usage(uid: str) -> dict:
             quiz_count = usage_data.get("quiz", {}).get("count", 0)
             slots_remaining = max(0, 5 - quiz_count)
             return {
-                "slots_remaining": slots_remaining,
+                "slots_remaining": get_user_quiz_usage(payload.uid)["slots_remaining"],
                 "total_used": quiz_count,
                 "max_limit": 5,
                 "is_limit_reached": slots_remaining <= 0
