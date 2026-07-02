@@ -73,8 +73,8 @@ def enforce_feature_limit(uid: str, feature_name: str, max_limit: int) -> int:
         # Pass up rate limits and controlled database connection errors unmodified
         raise
     except Exception as trans_err:
-        logger.error(f"Transaction pipeline failed during feature limit enforcement: {str(trans_err)}")
+        logger.exception(f"Transaction pipeline failed during feature limit enforcement for user.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to verify safety rate metrics."
+            detail="Failed to verify safety rate metrics. Please check server logs for details."
         )
