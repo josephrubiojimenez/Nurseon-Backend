@@ -32,10 +32,10 @@ def enforce_feature_limit(uid: str, feature_name: str, max_limit: int) -> int:
             # Pass the injected transaction instance directly into the read call
             doc = rate_limit_ref.get(transaction=transaction)
         except Exception as read_err:
-            logger.error(f"Failed to read limit state for user {uid}: {str(read_err)}")
+            logger.exception(f"Failed to read limit state for user {uid}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Temporary database congestion. Please try again in a few moments."
+                detail="Temporary database congestion. Please try again in a few moments. Check server logs for details."
             )
             
         timestamps = []
