@@ -3,7 +3,7 @@ import logging
 import json
 import hashlib
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Form, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 import google.generativeai as genai
 
@@ -77,7 +77,7 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
                 detail="The quiz generation engine is temporarily saturated. Please try again in 1 minute."
             )
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_520_UNKNOWN_ERROR,
             detail="Failed to generate a cleanly structured quiz layout from the AI platform."
         )
 
