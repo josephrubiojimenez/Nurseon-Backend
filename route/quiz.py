@@ -77,22 +77,22 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
         if "429" in error_msg or "quota" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="The AI generation engine is temporarily saturated. Please try again in 1 minute."
+                detail="Too many requests right now. Please wait a minute and try again."
             )
         elif "api_key" in error_msg.lower() or "invalid" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="AI service configuration error. Please contact support."
+                detail="Our AI assistant is taking a break. Please try again in a few minutes."
             )
         elif "timeout" in error_msg.lower() or "deadline" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="AI platform is taking too long to respond. Please try again."
+                detail="The AI is thinking too hard. Please try again in a moment."
             )
         else:
             raise HTTPException(
                 status_code=status.HTTP_520_UNKNOWN_ERROR,
-                detail=f"AI platform processing failed: {error_msg[:100]}"
+                detail="Oops! Something went wrong. Please try again."
             )
 
 # ==========================================
