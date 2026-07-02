@@ -9,7 +9,7 @@ def enforce_feature_limit(uid: str, feature_name: str, max_limit: int) -> int:
     """
     Enforces a rolling 24-hour request/action limit for a specific user and feature.
     
-    Uses standard db.run_transaction() to handle Firestore transactions natively,
+    Uses standard Firestore transactions to handle concurrent operations safely,
     ensuring safe operations against simultaneous request race conditions.
     """
     now = datetime.now(timezone.utc)
@@ -68,7 +68,8 @@ def enforce_feature_limit(uid: str, feature_name: str, max_limit: int) -> int:
 
     # 2. Execute via the official manager
     try:
-        return db.run_transaction(_execute_transaction)
+        transaction = db.transaction()
+        return _execute_transaction(transaction)
     except HTTPException:
         # Pass up rate limits and controlled database connection errors unmodified
         raise
