@@ -8,7 +8,7 @@ from typing import List, Optional
 from database.firebase import db
 from google import genai
 from google.genai import types
-from utils.limiters import enforce_feature_limit
+from utils.limiters import enforce_feature_limit, check_rate_limit_status
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -59,12 +59,7 @@ async def process_nurseon_chat(request: Request, payload: ChatPayload):
         raise HTTPException(status_code=500, detail="AI Core Core Engine offline.")
 
     # Enforce standard chat limit (10 queries per rolling window baseline)
-    try:
-        slots_remaining = enforce_feature_limit(payload.uid, "nurseon_ai_chat", max_limit=10)
-    except HTTPException as he:
-        raise he
-    except Exception:
-        slots_remaining = 0
+    slots_remaining = enforce_feature_limit(payload.uid, "nurseon_ai_chat", max_limit=10)
 
     session_id = payload.session_id or f"chat_{int(datetime.now(timezone.utc).timestamp())}"
     user_message = payload.message
@@ -143,13 +138,15 @@ async def check_chat_limits(payload: dict):
     if not uid:
         raise HTTPException(status_code=400, detail="Missing user payload reference ID.")
     
-    # Check limit without incrementing by mocking a dry transaction sequence or reading state balance parameters
-    try:
-        slots_remaining = enforce_feature_limit(uid, "nurseon_ai_chat", max_limit=10)
-    except Exception:
-        slots_remaining = 0
-        
-    return {"status": "success", "limit_remaining": slots_remaining}
+    # Check limit without incrementing using the safe status checker
+    limit_status = check_rate_limit_status(uid, "nurseon_ai_chat", max_limit=10)
+    
+    return {
+        "status": "success", 
+        "limit_remaining": limit_status["remaining"],
+        "available": limit_status["available"],
+        "reset_at": limit_status["reset_at"]
+    }
 
 
 @nurseon_ai_chat_router.get("/history/{uid}", status_code=status.HTTP_200_OK)

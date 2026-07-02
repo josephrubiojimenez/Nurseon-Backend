@@ -126,6 +126,7 @@ def run_gemini_evaluation(scenario: str, response_text: str) -> dict:
 @case_studies_router.post("/generate", status_code=status.HTTP_200_OK)
 async def generate_case_study(payload: CaseStudyPayload):
     # 1. Enforce regional limiter bounds
+    # This will raise HTTPException if limit is exceeded or database error occurs
     slots_remaining = enforce_feature_limit(payload.uid, "case_studies", max_limit=5)
 
     try:

@@ -98,6 +98,7 @@ async def summarize_document(
         )
 
     # 1. ENFORCE APP RATE LIMITER FIRST
+    # This will raise HTTPException if limit is exceeded or database error occurs
     slots_remaining = enforce_feature_limit(uid, "smart_notes", max_limit=5)
 
     try:

@@ -170,6 +170,7 @@ async def start_mock_exam(request: Request, payload: StartExamRequest):
         }
     
     # --- Enforce Feature Limit (Strictly 1 Attempt Maximum Per 24 Hours) ---
+    # This will raise HTTPException if limit is exceeded or database error occurs
     slots_remaining = enforce_feature_limit(uid, "mock_board_exam", max_limit=1)
 
     try:

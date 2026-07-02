@@ -88,6 +88,7 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
 @quiz_router.post("/generate", status_code=status.HTTP_200_OK)
 async def generate_quiz(payload: QuizGenerationPayload):
     # 1. ENFORCE LIMITER BEFORE ALL ACTIONS
+    # This will raise HTTPException if limit is exceeded or database error occurs
     slots_remaining = enforce_feature_limit(payload.uid, "quiz", max_limit=5)
 
     try:

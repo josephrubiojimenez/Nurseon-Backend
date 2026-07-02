@@ -12,6 +12,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi import _rate_limit_exceeded_handler
 
 from database.firebase import db 
+from utils.firebase_health import log_firebase_status
 from route.smart_notes import smart_notes_router
 from route.auth import auth_router
 from route.document import doc_router
@@ -27,6 +28,11 @@ if current_dir not in sys.path:
     sys.path.append(current_dir)
 
 app = FastAPI()
+
+# --- Firebase Health Check on Startup ---
+@app.on_event("startup")
+async def startup_event():
+    log_firebase_status()
 
 # --- SlowAPI Global Configuration Setup ---
 # Attach your limiter state to the app context and bind the standard HTTP 429 handler
