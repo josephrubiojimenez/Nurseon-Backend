@@ -95,41 +95,37 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
                 detail="Oops! Something went wrong. Please try again."
             )
 
-# ==========================================
-# 3. HELPER FUNCTION FOR USER USAGE
-# ==========================================
-
 def get_user_quiz_usage(uid: str) -> dict:
-    """Get the current quiz usage for a user."""
+    """Get the current quiz usage for a user from the rate_limits collection."""
     try:
-        usage_doc = db.collection("user_usage").document(uid).get()
-        if usage_doc.exists:
-            usage_data = usage_doc.to_dict()
-            quiz_count = usage_data.get("quiz", {}).get("count", 0)
-            slots_remaining = max(0, 5 - quiz_count)
-            return {
-                "slots_remaining": get_user_quiz_usage(payload.uid)["slots_remaining"],
-                "total_used": quiz_count,
-                "max_limit": 5,
-                "is_limit_reached": slots_remaining <= 0
-            }
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
+        twenty_four_hours_ago = now - timedelta(days=1)
+        rate_limit_ref = db.collection("rate_limits").document(f"{uid}_quiz")
+        doc = rate_limit_ref.get()
+        if doc.exists:
+            data = doc.to_dict() or {}
+            raw_timestamps = data.get("timestamps", [])
+            timestamps = [t if t.tzinfo else t.replace(tzinfo=timezone.utc) for t in raw_timestamps]
+            valid_timestamps = [t for t in timestamps if t > twenty_four_hours_ago]
+            total_used = len(valid_timestamps)
         else:
-            return {
-                "slots_remaining": 5,
-                "total_used": 0,
-                "max_limit": 5,
-                "is_limit_reached": False
-            }
+            total_used = 0
+        slots_remaining = max(0, 5 - total_used)
+        return {
+            "slots_remaining": slots_remaining,
+            "total_used": total_used,
+            "max_limit": 5,
+            "is_limit_reached": slots_remaining <= 0
+        }
     except Exception as e:
         logger.error(f"Failed to get user usage for {uid}: {str(e)}")
-        # Return default values if there's an error
         return {
-            "slots_remaining": 5,
+            "slots_remaining": 0,
             "total_used": 0,
             "max_limit": 5,
             "is_limit_reached": False
         }
-
 # ==========================================
 # 4. ROUTER ENDPOINTS
 # ==========================================
