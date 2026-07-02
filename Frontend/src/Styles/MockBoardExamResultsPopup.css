@@ -1,0 +1,152 @@
+/* ==========================================================================
+   MockBoardExamResultsPopup Styles
+   ========================================================================== */
+
+.exam-results-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.exam-results-card {
+    background-color: var(--bg-card, #ffffff);
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 16px;
+    box-shadow: var(--card-shadow, 0 10px 25px -5px rgba(0, 0, 0, 0.1));
+    width: 100%;
+    max-width: 420px;
+    padding: 32px 24px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    animation: popupScaleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Dark theme explicit overrides matching your system tokens */
+.dark .exam-results-card,
+[data-theme='dark'] .exam-results-card {
+    background-color: var(--bg-card);
+    border-color: var(--border-color);
+}
+
+/* --- Status Elements --- */
+
+.results-celebration,
+.results-encouragement {
+    font-size: 48px;
+    margin-bottom: 16px;
+    line-height: 1;
+}
+
+.results-title {
+    margin: 0 0 8px 0;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-heading, #111827);
+    letter-spacing: 0.5px;
+}
+
+.results-message {
+    margin: 0 0 24px 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-nav, #4b5563);
+}
+
+/* --- Score Presentation Box --- */
+
+.results-score-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background-color: var(--nav-hover-bg, #f3f4f6);
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 12px;
+    padding: 16px;
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 20px;
+}
+
+.results-score-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-nav, #6b7280);
+}
+
+.results-score-value {
+    font-size: 32px;
+    font-weight: 800;
+    color: var(--text-heading, #111827);
+}
+
+/* --- Action Tips --- */
+
+.results-tip {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-nav, #4b5563);
+    border-left: 3px solid #3b82f6;
+    padding-left: 12px;
+    text-align: left;
+    margin: 0 0 24px 0;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* --- Interactive Elements --- */
+
+.results-continue-btn {
+    width: 100%;
+    padding: 12px 24px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #ffffff;
+    background-color: #3b82f6; /* Defaults to a solid blue match */
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+    outline: none;
+}
+
+.results-continue-btn:hover {
+    background-color: #2563eb;
+}
+
+.results-continue-btn:active {
+    transform: scale(0.98);
+}
+
+.results-continue-btn:focus-visible {
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4);
+}
+
+/* --- Entry Animation --- */
+
+@keyframes popupScaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.92);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
