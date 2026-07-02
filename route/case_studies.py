@@ -57,16 +57,6 @@ difficulty_points = {
     "Hard": 30
 }
 
-evaluation_record = {
-    "user_uid": payload.uid,
-    "patient_scenario": payload.patient_scenario,
-    "student_response": payload.student_response,
-    "evaluation_details": evaluation_data,
-    "evaluated_at": datetime.now(timezone.utc),
-    "source": "gemini_evaluation",
-    "difficulty": payload.difficulty,  # ← Add from context
-    "points_awarded": difficulty_points.get(payload.difficulty, 20)
-}
 
 db.collection("case_evaluations").document().set(evaluation_record)
 
@@ -269,15 +259,18 @@ async def evaluate_response(payload: EvaluationPayload):
             cached_eval = cache_doc.to_dict()
             logger.info("Evaluation Cache Hit! Instantly serving computed clinical appraisal score.")
 
-            user_eval_record = {
+            evaluation_record = {
                 "user_uid": payload.uid,
                 "patient_scenario": payload.patient_scenario,
                 "student_response": payload.student_response,
-                "evaluation_details": cached_eval["evaluation_details"],
+                "evaluation_details": evaluation_data,
                 "evaluated_at": datetime.now(timezone.utc),
-                "source": "cache"
+                "source": "gemini_evaluation",
+                "difficulty": payload.difficulty,  # ← Add from context
+                "points_awarded": difficulty_points.get(payload.difficulty, 20)
             }
-            db.collection("case_evaluations").document().set(user_eval_record)
+
+            db.collection("case_evaluations").document().set(evaluation_record)
 
             return {
                 "status": "success",
