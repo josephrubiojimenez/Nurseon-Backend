@@ -89,7 +89,7 @@ app.include_router(
 
 # Feature - AI
 app.include_router(
-    nurseon_ai_router,
+    nurseon_ai_chat_router,
     prefix='/api/nurseon-ai',
     tags=["Nurseon AI"]
 )
