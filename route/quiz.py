@@ -17,10 +17,29 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
+# ==========================================
+# 1. SCHEMAS & STRUCTURAL PAYLOADS
+# ==========================================
+
 class QuizGenerationPayload(BaseModel):
     uid: str
     topic: str
     num_questions: int = Field(default=5, ge=1, le=20)
+
+class QuizQuestion(BaseModel):
+    """Schema for an individual quiz question."""
+    question: str
+    options: list[str]
+    correct_answer: str
+    rationale: str
+
+class QuizStructure(BaseModel):
+    """Root container model for Gemini Structured Output."""
+    questions: list[QuizQuestion]
+
+# ==========================================
+# 2. CORE AI GENERATION ENGINE
+# ==========================================
 
 def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
     if not GEMINI_API_KEY:
@@ -32,28 +51,24 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
     model = genai.GenerativeModel("gemini-2.5-flash")
     
     system_prompt = (
-        "You are an expert Nursing Board Exam (NCLEX) Quiz Creator. Create a highly accurate "
-        "multiple-choice quiz consisting of exactly {num_questions} questions about the requested topic.\n\n"
-        "You MUST return ONLY a clean JSON array (no markdown code blocks, no ```json formatting wrappers). "
-        "Each object in the array must follow this exact schema:\n"
-        "{\n"
-        '  "question": "The question string here?",\n'
-        '  "options": ["Option A", "Option B", "Option C", "Option D"],\n'
-        '  "correct_answer": "The exact string match of the correct option",\n'
-        '  "rationale": "Clinical rationale explaining why this answer is correct."\n'
-        "}"
+        f"You are an expert Nursing Board Exam (NCLEX) and (PNLE) Quiz Creator. Create a highly accurate "
+        f"multiple-choice quiz consisting of exactly {num_questions} questions about the requested topic."
     )
 
     try:
-        response = model.generate_content(system_prompt.format(num_questions=num_questions) + f"\n\nTopic: {topic}")
-        clean_text = response.text.strip()
+        # Request native JSON output structurally guaranteed by the Pydantic schema
+        response = model.generate_content(
+            f"System: {system_prompt}\n\nTopic: {topic}",
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=QuizStructure
+            )
+        )
         
-        if clean_text.startswith("```"):
-            clean_text = clean_text.split("\n", 1)[1].rsplit("\n", 1)[0].strip()
-        if clean_text.startswith("json"):
-            clean_text = clean_text.split("\n", 1)[1].strip()
+        # Parse the reliable JSON structure safely
+        quiz_data = json.loads(response.text)
+        return quiz_data["questions"]
 
-        return json.loads(clean_text)
     except Exception as e:
         logger.error(f"Gemini Quiz Parsing/API Failure: {str(e)}")
         if "429" in str(e) or "quota" in str(e).lower():
@@ -65,6 +80,10 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to generate a cleanly structured quiz layout from the AI platform."
         )
+
+# ==========================================
+# 3. ROUTER ENDPOINT
+# ==========================================
 
 @quiz_router.post("/generate", status_code=status.HTTP_200_OK)
 async def generate_quiz(payload: QuizGenerationPayload):

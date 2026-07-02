@@ -2,15 +2,24 @@ import os
 import sys
 from dotenv import load_dotenv
 load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# --- SlowAPI Imports for Global Setup ---
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi import _rate_limit_exceeded_handler
+
 from database.firebase import db 
 from route.smart_notes import smart_notes_router
 from route.auth import auth_router
 from route.document import doc_router
 from route.quiz import quiz_router
 from route.case_studies import case_studies_router
-from route.nurseon_ai_chat import nurseon_ai_router
+
+# Import the router alongside its internal instantiated limiter configuration instance
+from route.nurseon_ai_chat import nurseon_ai_router, limiter
 from route.mock_board_exam import mock_board_exam_router
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +27,12 @@ if current_dir not in sys.path:
     sys.path.append(current_dir)
 
 app = FastAPI()
+
+# --- SlowAPI Global Configuration Setup ---
+# Attach your limiter state to the app context and bind the standard HTTP 429 handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 origins = [
     "http://localhost:5173",      # Local Vite dev server (older default)

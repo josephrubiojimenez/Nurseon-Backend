@@ -1,10 +1,8 @@
 # Use a lightweight Python base image
 FROM python:3.10-slim
 
-# Install system dependencies required for Tesseract OCR
-# OPTIONAL ADJUSTMENT: If image processing throws a library error
+# Install system dependencies required for standard image handling (OpenCV/Pillow)
 RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
     libgl1 \
     libjpeg-dev \
     zlib1g-dev \
@@ -23,5 +21,5 @@ COPY . .
 # Expose Render's standard web service port
 EXPOSE 10000
 
-# Fire up the FastAPI app using Uvicorn
-CMD ["uvicorn", "Nurseon:app", "--host", "0.0.0.0", "--port", "10000"]
+# Fire up the FastAPI app using Uvicorn with trusted proxy headers
+CMD ["uvicorn", "Nurseon:app", "--host", "0.0.0.0", "--port", "10000", "--proxy-headers", "--forwarded-allow-ips=*"]
