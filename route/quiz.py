@@ -96,21 +96,94 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
             )
 
 # ==========================================
-# 3. ROUTER ENDPOINT
+# 3. HELPER FUNCTION FOR USER USAGE
 # ==========================================
+
+def get_user_quiz_usage(uid: str) -> dict:
+    """Get the current quiz usage for a user."""
+    try:
+        usage_doc = db.collection("user_usage").document(uid).get()
+        if usage_doc.exists:
+            usage_data = usage_doc.to_dict()
+            quiz_count = usage_data.get("quiz", {}).get("count", 0)
+            slots_remaining = max(0, 5 - quiz_count)
+            return {
+                "slots_remaining": slots_remaining,
+                "total_used": quiz_count,
+                "max_limit": 5,
+                "is_limit_reached": slots_remaining <= 0
+            }
+        else:
+            return {
+                "slots_remaining": 5,
+                "total_used": 0,
+                "max_limit": 5,
+                "is_limit_reached": False
+            }
+    except Exception as e:
+        logger.error(f"Failed to get user usage for {uid}: {str(e)}")
+        # Return default values if there's an error
+        return {
+            "slots_remaining": 5,
+            "total_used": 0,
+            "max_limit": 5,
+            "is_limit_reached": False
+        }
+
+# ==========================================
+# 4. ROUTER ENDPOINTS
+# ==========================================
+
+@quiz_router.get("/usage/{uid}")
+async def get_user_usage(uid: str):
+    """Get the current quiz usage and limits for a user."""
+    try:
+        usage_info = get_user_quiz_usage(uid)
+        return {
+            "status": "success",
+            **usage_info
+        }
+    except Exception as e:
+        logger.error(f"Failed to get usage: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve usage information"
+        )
 
 @quiz_router.post("/generate", status_code=status.HTTP_200_OK)
 async def generate_quiz(payload: QuizGenerationPayload):
-    # 1. ENFORCE LIMITER BEFORE ALL ACTIONS
-    # This will raise HTTPException if limit is exceeded or database error occurs
-    slots_remaining = enforce_feature_limit(payload.uid, "quiz", max_limit=5)
-
+    # ==========================================
+    # 1. CHECK LIMITS FIRST
+    # ==========================================
     try:
-        # 2. CREATE A UNIQUE CACHE FINGERPRINT
+        # This will raise HTTPException if limit is exceeded
+        slots_remaining = enforce_feature_limit(payload.uid, "quiz", max_limit=5)
+        is_limit_reached = False
+    except HTTPException as http_err:
+        # If the limit is exceeded, get the remaining slots
+        if http_err.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            usage_info = get_user_quiz_usage(payload.uid)
+            
+            # Return a custom response with the remaining slots
+            return {
+                "status": "error",
+                "detail": http_err.detail,
+                "slots_remaining": usage_info["slots_remaining"],
+                "is_limit_reached": True,
+                "total_used": usage_info["total_used"],
+                "max_limit": usage_info["max_limit"]
+            }
+        raise http_err
+
+    # ==========================================
+    # 2. PROCEED WITH QUIZ GENERATION
+    # ==========================================
+    try:
+        # CREATE A UNIQUE CACHE FINGERPRINT
         clean_topic = payload.topic.strip().lower()
         quiz_fingerprint = hashlib.md5(f"{clean_topic}_{payload.num_questions}".encode('utf-8')).hexdigest()
 
-        # 3. ATTEMPT CACHE QUERY LOOKUP
+        # ATTEMPT CACHE QUERY LOOKUP
         cache_doc = db.collection("quizzes_cache").document(quiz_fingerprint).get()
 
         if cache_doc.exists:
@@ -133,10 +206,11 @@ async def generate_quiz(payload: QuizGenerationPayload):
                 "quiz_id": cache_doc.id,
                 "topic": payload.topic,
                 "questions": cached_quiz["questions"],
-                "slots_remaining": slots_remaining
+                "slots_remaining": slots_remaining,
+                "is_limit_reached": False
             }
 
-        # 4. CACHE MISS -> CALL GEMINI AI
+        # CACHE MISS -> CALL GEMINI AI
         questions_list = run_gemini_quiz_generation(payload.topic, payload.num_questions)
 
         quiz_data = {
@@ -164,7 +238,8 @@ async def generate_quiz(payload: QuizGenerationPayload):
             "quiz_id": doc_ref.id,
             "topic": quiz_data["topic"],
             "questions": questions_list,
-            "slots_remaining": slots_remaining
+            "slots_remaining": slots_remaining,
+            "is_limit_reached": False
         }
 
     except HTTPException as http_err:
