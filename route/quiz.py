@@ -70,16 +70,30 @@ def run_gemini_quiz_generation(topic: str, num_questions: int) -> list:
         return quiz_data["questions"]
 
     except Exception as e:
-        logger.error(f"Gemini Quiz Parsing/API Failure: {str(e)}")
-        if "429" in str(e) or "quota" in str(e).lower():
+        error_msg = str(e)
+        logger.error(f"Gemini Quiz Parsing/API Failure: {error_msg}", exc_info=True)
+        
+        # Provide specific error messages based on the error
+        if "429" in error_msg or "quota" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="The quiz generation engine is temporarily saturated. Please try again in 1 minute."
+                detail="The AI generation engine is temporarily saturated. Please try again in 1 minute."
             )
-        raise HTTPException(
-            status_code=status.HTTP_520_UNKNOWN_ERROR,
-            detail="Failed to generate a cleanly structured quiz layout from the AI platform."
-        )
+        elif "api_key" in error_msg.lower() or "invalid" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AI service configuration error. Please contact support."
+            )
+        elif "timeout" in error_msg.lower() or "deadline" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="AI platform is taking too long to respond. Please try again."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_520_UNKNOWN_ERROR,
+                detail=f"AI platform processing failed: {error_msg[:100]}"
+            )
 
 # ==========================================
 # 3. ROUTER ENDPOINT

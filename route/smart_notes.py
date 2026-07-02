@@ -53,16 +53,29 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         return response.text if response.text else "Failed to deliver structured text. Please upload another file or image."
         
     except Exception as ai_err:
-        logger.error(f"Gemini API Error: {str(ai_err)}")
-        if "429" in str(ai_err) or "quota" in str(ai_err).lower():
+        error_msg = str(ai_err)
+        logger.error(f"Gemini API Error: {error_msg}", exc_info=True)
+        
+        if "429" in error_msg or "quota" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="The AI generation engine is temporarily saturated. Please try again in 1 minute."
             )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="AI platform processing failed. Please try again later."
-        )
+        elif "api_key" in error_msg.lower() or "invalid" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AI service configuration error. Please contact support."
+            )
+        elif "timeout" in error_msg.lower() or "deadline" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="AI platform is taking too long to respond. Please try again."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"AI platform processing failed: {error_msg[:100]}"
+            )
     finally:
         # 3. Always clean up files from Google Storage immediately after the prompt completes
         if uploaded_gemini_file:

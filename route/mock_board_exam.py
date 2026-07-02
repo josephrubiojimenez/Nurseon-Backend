@@ -88,11 +88,29 @@ def generate_all_100_questions() -> list:
         raw_json = json.loads(response.text)
         return raw_json.get("questions", [])
     except Exception as e:
+        error_msg = str(e)
         logger.exception("Unified AI Exam Generation Failure")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to compile target exam items: {str(e)}"
-        )
+        
+        if "429" in error_msg or "quota" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="The AI generation engine is temporarily saturated. Please try again in 1 minute."
+            )
+        elif "api_key" in error_msg.lower() or "invalid" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AI service configuration error. Please contact support."
+            )
+        elif "timeout" in error_msg.lower() or "deadline" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="AI platform is taking too long to respond. Please try again."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"AI platform processing failed: {error_msg[:100]}"
+            )
 
 
 def get_cached_exam_questions(uid: str) -> tuple[list, str] | None:

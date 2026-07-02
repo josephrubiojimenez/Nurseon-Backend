@@ -128,8 +128,29 @@ async def process_nurseon_chat(request: Request, payload: ChatPayload):
         }
 
     except Exception as e:
-        logger.error(f"Chat communication fault: {str(e)}")
-        raise HTTPException(status_code=500, detail="Transmission failure on neural network processor.")
+        error_msg = str(e)
+        logger.error(f"Chat communication fault: {error_msg}", exc_info=True)
+        
+        if "429" in error_msg or "quota" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="The AI generation engine is temporarily saturated. Please try again in 1 minute."
+            )
+        elif "api_key" in error_msg.lower() or "invalid" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AI service configuration error. Please contact support."
+            )
+        elif "timeout" in error_msg.lower() or "deadline" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="AI platform is taking too long to respond. Please try again."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"AI platform processing failed: {error_msg[:100]}"
+            )
 
 
 @nurseon_ai_chat_router.post("/limit-check", status_code=status.HTTP_200_OK)

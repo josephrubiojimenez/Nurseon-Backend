@@ -77,11 +77,29 @@ def run_gemini_case_generation(topic: str, difficulty: str) -> dict:
         )
         return json.loads(response.text)
     except Exception as e:
-        logger.error(f"Gemini Case Study Generation Failure: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to generate a cleanly structured clinical case layout from the AI platform."
-        )
+        error_msg = str(e)
+        logger.error(f"Gemini Case Study Generation Failure: {error_msg}", exc_info=True)
+        
+        if "429" in error_msg or "quota" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="The AI generation engine is temporarily saturated. Please try again in 1 minute."
+            )
+        elif "api_key" in error_msg.lower() or "invalid" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AI service configuration error. Please contact support."
+            )
+        elif "timeout" in error_msg.lower() or "deadline" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="AI platform is taking too long to respond. Please try again."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"AI platform processing failed: {error_msg[:100]}"
+            )
 
 
 def run_gemini_evaluation(scenario: str, response_text: str) -> dict:
@@ -113,11 +131,29 @@ def run_gemini_evaluation(scenario: str, response_text: str) -> dict:
         )
         return json.loads(response.text)
     except Exception as e:
-        logger.error(f"Gemini Evaluation Pipeline Failure: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to extract a clean structural evaluation score from the AI engine."
-        )
+        error_msg = str(e)
+        logger.error(f"Gemini Evaluation Pipeline Failure: {error_msg}", exc_info=True)
+        
+        if "429" in error_msg or "quota" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="The AI generation engine is temporarily saturated. Please try again in 1 minute."
+            )
+        elif "api_key" in error_msg.lower() or "invalid" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="AI service configuration error. Please contact support."
+            )
+        elif "timeout" in error_msg.lower() or "deadline" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="AI platform is taking too long to respond. Please try again."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"AI platform processing failed: {error_msg[:100]}"
+            )
 
 # ==========================================
 # 3. ROUTER ENDPOINTS
