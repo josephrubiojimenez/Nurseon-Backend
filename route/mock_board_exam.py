@@ -126,7 +126,7 @@ def get_cached_exam_questions(uid: str) -> tuple[list, str] | None:
             
             if started_at and questions_data:
                 now = datetime.now(timezone.utc)
-                cooldown_expiry = started_at + timedelta(hours=24)
+                cooldown_expiry = started_at + timedelta(seconds=0)
                 
                 if now < cooldown_expiry:
                     return questions_data, exam_id
