@@ -3,12 +3,12 @@ from datetime import datetime, timezone
 import logging
 
 from database.firebase import db
+from utils.limiters import check_rate_limit_status
 
 logger = logging.getLogger("progress_router")
 progress_router = APIRouter()
 
 # Configuration Constants
-DAILY_CASE_STUDY_LIMIT = 5  # Daily limit for case studies
 MAX_CASE_STUDY_POINTS = 100  # Maximum points to reach 100% progress
 
 # Difficulty points mapping
@@ -42,7 +42,6 @@ async def get_user_progress(uid: str):
                 "overallBoardScore": 0,
                 "studyStreak": 0,
                 "timeSpentHours": 0,
-                "dailyLimitRemaining": DAILY_CASE_STUDY_LIMIT,
                 "weaknesses": [],
                 "weaknessRecommendation": "Complete more activities to get personalized insights"
             }
@@ -73,12 +72,8 @@ async def get_user_progress(uid: str):
         else:
             overall_accuracy = 0
         
-        # Calculate remaining daily limit
-        today = datetime.now(timezone.utc).date()
-        daily_usage = data.get("daily_case_study_usage", {})
-        today_key = today.isoformat()
-        used_today = daily_usage.get(today_key, 0)
-        daily_limit_remaining = max(0, DAILY_CASE_STUDY_LIMIT - used_today)
+        # Get case study limit status using the new limiter
+        limit_status = check_rate_limit_status(uid, "case_studies", max_limit=5)
         
         return {
             "quizzesAnswered": data.get("quizzes_answered", 0),
@@ -93,7 +88,7 @@ async def get_user_progress(uid: str):
             "overallBoardScore": data.get("overall_board_score", 0),
             "studyStreak": data.get("study_streak", 0),
             "timeSpentHours": data.get("time_spent_hours", 0),
-            "dailyLimitRemaining": daily_limit_remaining,
+            "dailyLimitRemaining": limit_status.get("remaining", 5),
             "weaknesses": data.get("weaknesses", []),
             "weaknessRecommendation": data.get("weakness_recommendation", 
                 "Keep studying and complete more case studies to identify weak areas!")
@@ -130,19 +125,6 @@ async def update_case_study_progress(payload: dict):
         # Get points for difficulty
         points = DIFFICULTY_POINTS.get(difficulty, 20)
         
-        # Track daily usage
-        today = datetime.now(timezone.utc).date()
-        today_key = today.isoformat()
-        daily_usage = current_data.get("daily_case_study_usage", {})
-        used_today = daily_usage.get(today_key, 0)
-        
-        # Check if user has exceeded daily limit
-        if used_today >= DAILY_CASE_STUDY_LIMIT:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Daily case study limit reached. Please try again tomorrow."
-            )
-        
         # Calculate new total points
         current_points = current_data.get("total_case_study_points", 0)
         new_points = current_points + points
@@ -152,10 +134,6 @@ async def update_case_study_progress(payload: dict):
             "total_case_study_points": new_points,
             "last_updated": datetime.now(timezone.utc)
         }
-        
-        # Update daily usage
-        daily_usage[today_key] = used_today + 1
-        update_data["daily_case_study_usage"] = daily_usage
         
         # Add score if provided
         if score is not None:
@@ -193,9 +171,6 @@ async def update_case_study_progress(payload: dict):
         # Commit update
         progress_ref.set(update_data, merge=True)
         
-        # Calculate remaining daily limit after update
-        remaining = DAILY_CASE_STUDY_LIMIT - (used_today + 1)
-        
         # Calculate progress percentage
         progress_percent = min(100, round((new_points / MAX_CASE_STUDY_POINTS) * 100))
         
@@ -205,8 +180,7 @@ async def update_case_study_progress(payload: dict):
             "success": True,
             "message": "Progress updated successfully",
             "case_study_points": new_points,
-            "case_progress_percent": progress_percent,
-            "daily_limit_remaining": remaining
+            "case_progress_percent": progress_percent
         }
         
     except HTTPException:

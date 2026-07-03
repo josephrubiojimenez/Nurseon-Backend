@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 import google.generativeai as genai
 
 from database.firebase import db
-from utils.limiters import enforce_feature_limit
+from utils.limiters import enforce_feature_limit, check_rate_limit_status
 
 logger = logging.getLogger("case_studies_router")
 case_studies_router = APIRouter()
@@ -30,7 +30,7 @@ class EvaluationPayload(BaseModel):
     uid: str
     patient_scenario: str
     student_response: str
-    difficulty: str = "Standard"  # Added to track difficulty for points
+    difficulty: str = "Standard"
 
 # --- Gemini Structured Output Definitions ---
 
@@ -164,75 +164,83 @@ def run_gemini_evaluation(scenario: str, response_text: str) -> dict:
 
 
 def update_user_progress(uid: str, difficulty: str, score: int = None):
-    """
-    Update user progress for case studies with points-based system.
-    Easy = 10 points, Standard = 20 points, Hard = 30 points
-    Max points = 100
-    """
+    """Update user progress for case studies with points-based system."""
     try:
         progress_ref = db.collection("user_progress").document(uid)
-        
-        # Get current progress
         doc = progress_ref.get()
         current_data = doc.to_dict() if doc.exists else {}
         
-        # Calculate points based on difficulty
         points = difficulty_points.get(difficulty, 20)
-        
-        # Calculate new total points
         current_points = current_data.get("total_case_study_points", 0)
         new_points = current_points + points
         
-        # Update the document
         update_data = {
             "total_case_study_points": new_points,
             "last_updated": datetime.now(timezone.utc)
         }
         
-        # If score is provided, update accuracy
         if score is not None:
             total_scores = current_data.get("case_study_scores", [])
             total_scores.append(score)
             update_data["case_study_scores"] = total_scores
-            
-            # Calculate average score
             if total_scores:
                 avg_score = sum(total_scores) / len(total_scores)
                 update_data["overall_case_study_accuracy"] = round(avg_score, 2)
         
         progress_ref.set(update_data, merge=True)
         logger.info(f"✅ Updated progress for user {uid}: +{points} points (Total: {new_points})")
-        
         return new_points
-        
     except Exception as e:
         logger.error(f"Failed to update progress for user {uid}: {str(e)}", exc_info=True)
-        # Don't raise - this is non-critical
 
 
 # ==========================================
 # 3. ROUTER ENDPOINTS
 # ==========================================
 
+@case_studies_router.post("/limit-status", status_code=status.HTTP_200_OK)
+async def get_case_study_limit_status(payload: dict):
+    """Get the current rate limit status for case studies."""
+    uid = payload.get("uid")
+    if not uid:
+        raise HTTPException(status_code=400, detail="Missing user UID")
+    
+    limit_status = check_rate_limit_status(uid, "case_studies", max_limit=5)
+    return {
+        "status": "success",
+        "slots_remaining": limit_status["remaining"],
+        "used": limit_status.get("used", 0),
+        "available": limit_status["available"],
+        "reset_at": limit_status["reset_at"]
+    }
+
+
 @case_studies_router.post("/generate", status_code=status.HTTP_200_OK)
 async def generate_case_study(payload: CaseStudyPayload):
-    # 1. Enforce regional limiter bounds
-    slots_remaining = enforce_feature_limit(payload.uid, "case_studies", max_limit=5)
+    try:
+        slots_remaining = enforce_feature_limit(payload.uid, "case_studies", max_limit=5)
+    except HTTPException as e:
+        if e.status_code == 429:
+            # Get the reset time from the status check
+            limit_status = check_rate_limit_status(payload.uid, "case_studies", max_limit=5)
+            reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Case Study limit reached. You can try again{reset_msg}."
+            )
+        raise e
 
     try:
-        # 2. Build Cache Fingerprint
         clean_topic = payload.topic.strip().lower()
         clean_difficulty = payload.difficulty.strip().lower()
         case_fingerprint = hashlib.md5(f"{clean_topic}_{clean_difficulty}".encode('utf-8')).hexdigest()
 
-        # 3. Cache Query Check
         cache_doc = db.collection("cases_cache").document(case_fingerprint).get()
 
         if cache_doc.exists:
             cached_case = cache_doc.to_dict()
             logger.info(f"Case Study Cache Hit! Serving topic: '{payload.topic}' [{payload.difficulty}]")
 
-            # Save user log history event
             user_case_record = {
                 "user_uid": payload.uid,
                 "topic": payload.topic,
@@ -250,7 +258,6 @@ async def generate_case_study(payload: CaseStudyPayload):
                 "slots_remaining": slots_remaining
             }
 
-        # 4. Cache Miss -> Process New AI Data
         case_data_object = run_gemini_case_generation(payload.topic, payload.difficulty)
 
         record = {
@@ -262,7 +269,6 @@ async def generate_case_study(payload: CaseStudyPayload):
             "source": "gemini_generation"
         }
 
-        # Write record history and seed regional cache map
         doc_ref = db.collection("generated_cases").document()
         doc_ref.set(record)
 
@@ -293,19 +299,16 @@ async def generate_case_study(payload: CaseStudyPayload):
 @case_studies_router.post("/evaluate", status_code=status.HTTP_200_OK)
 async def evaluate_response(payload: EvaluationPayload):
     try:
-        # 1. Build Evaluation Cache Fingerprint
         clean_scenario = payload.patient_scenario.strip().lower()
         clean_response = payload.student_response.strip().lower()
         eval_fingerprint = hashlib.md5(f"{clean_scenario}_{clean_response}".encode('utf-8')).hexdigest()
 
-        # 2. Check for matching Evaluation Cache
         cache_doc = db.collection("evaluations_cache").document(eval_fingerprint).get()
 
         if cache_doc.exists:
             cached_eval = cache_doc.to_dict()
             logger.info("Evaluation Cache Hit! Instantly serving computed clinical appraisal score.")
 
-            # Save evaluation record for cache hit
             evaluation_record = {
                 "user_uid": payload.uid,
                 "patient_scenario": payload.patient_scenario,
@@ -316,7 +319,6 @@ async def evaluate_response(payload: EvaluationPayload):
             }
             db.collection("case_evaluations").document().set(evaluation_record)
             
-            # Update progress for cached evaluation
             score = cached_eval["evaluation_details"].get("score_percentage")
             update_user_progress(payload.uid, payload.difficulty, score)
 
@@ -326,10 +328,8 @@ async def evaluate_response(payload: EvaluationPayload):
                 "progress_updated": True
             }
 
-        # 3. Cache Miss -> Evaluate with Gemini
         evaluation_data = run_gemini_evaluation(payload.patient_scenario, payload.student_response)
 
-        # Save evaluation record for cache miss
         evaluation_record = {
             "user_uid": payload.uid,
             "patient_scenario": payload.patient_scenario,
@@ -339,15 +339,12 @@ async def evaluate_response(payload: EvaluationPayload):
             "source": "gemini_evaluation"
         }
 
-        # 4. Commit to database and update cache mapping
         db.collection("case_evaluations").document().set(evaluation_record)
-        
         db.collection("evaluations_cache").document(eval_fingerprint).set({
             "evaluation_details": evaluation_data,
             "cached_at": datetime.now(timezone.utc)
         })
 
-        # 5. Update user progress
         score = evaluation_data.get("score_percentage")
         update_user_progress(payload.uid, payload.difficulty, score)
 

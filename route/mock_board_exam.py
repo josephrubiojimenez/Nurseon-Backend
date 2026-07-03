@@ -9,8 +9,8 @@ from typing import List
 
 from database.firebase import db
 from google import genai
-from google.genai import types  # Configures structured schema fields
-from utils.limiters import enforce_feature_limit
+from google.genai import types
+from utils.limiters import enforce_feature_limit, check_rate_limit_status
 from route.nurseon_ai_chat import limiter
 
 logger = logging.getLogger("mock_board_exam")
@@ -29,11 +29,11 @@ class QuestionOptionSchema(BaseModel):
     D: str
 
 class QuestionSchema(BaseModel):
-    id: str = Field(description="Sequential string index from '1' up to '100'")
-    question: str = Field(description="Clear, realistic clinical nursing scenario context")
+    id: str
+    question: str
     options: QuestionOptionSchema
-    correct_answer: str = Field(description="Single uppercase character letter: A, B, C, or D")
-    rationale: str = Field(description="Clear clinical reason explaining why that answer is correct")
+    correct_answer: str
+    rationale: str
 
 class UnifiedExamResponseSchema(BaseModel):
     questions: List[QuestionSchema]
@@ -45,7 +45,7 @@ class StartExamRequest(BaseModel):
 class SubmitExamRequest(BaseModel):
     uid: str
     exam_id: str
-    answers: dict  # Format: {"1": "A", "2": "C", ...}
+    answers: dict
 
 class ResetScoreReleaseRequest(BaseModel):
     uid: str
@@ -75,7 +75,6 @@ def generate_all_100_questions() -> list:
     )
 
     try:
-        # Enforce structured output via the modern unified genai SDK
         response = genai_client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
@@ -149,6 +148,23 @@ def cache_exam_questions(uid: str, questions: list, exam_id: str) -> None:
         logger.error(f"Error caching exam questions: {str(e)}")
 
 
+@mock_board_exam_router.post("/limit-status", status_code=status.HTTP_200_OK)
+async def get_mock_exam_limit_status(payload: dict):
+    """Get the current rate limit status for mock board exam."""
+    uid = payload.get("uid")
+    if not uid:
+        raise HTTPException(status_code=400, detail="Missing user UID")
+    
+    limit_status = check_rate_limit_status(uid, "mock_board_exam", max_limit=1)
+    return {
+        "status": "success",
+        "slots_remaining": limit_status["remaining"],
+        "used": limit_status.get("used", 0),
+        "available": limit_status["available"],
+        "reset_at": limit_status["reset_at"]
+    }
+
+
 @mock_board_exam_router.post("/start", status_code=status.HTTP_200_OK)
 @limiter.limit("3/minute")
 async def start_mock_exam(request: Request, payload: StartExamRequest):
@@ -187,9 +203,19 @@ async def start_mock_exam(request: Request, payload: StartExamRequest):
             "cached": True
         }
     
-    # --- Enforce Feature Limit (Strictly 1 Attempt Maximum Per 24 Hours) ---
-    # This will raise HTTPException if limit is exceeded or database error occurs
-    slots_remaining = enforce_feature_limit(uid, "mock_board_exam", max_limit=1)
+    # --- Enforce Feature Limit (Strictly 1 Attempt Maximum Per 24-hour Window) ---
+    try:
+        slots_remaining = enforce_feature_limit(uid, "mock_board_exam", max_limit=1)
+    except HTTPException as e:
+        if e.status_code == 429:
+            # Get the reset time from the status check
+            limit_status = check_rate_limit_status(uid, "mock_board_exam", max_limit=1)
+            reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Mock Board Exam limit reached. You can try again{reset_msg}."
+            )
+        raise e
 
     try:
         questions = generate_all_100_questions()

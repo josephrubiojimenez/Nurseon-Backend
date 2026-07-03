@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, status
 import google.generativeai as genai
 
 from database.firebase import db
-from utils.limiters import enforce_feature_limit
+from utils.limiters import enforce_feature_limit, check_rate_limit_status
 
 logger = logging.getLogger("smart_notes")
 smart_notes_router = APIRouter()
@@ -44,14 +44,9 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
 
     uploaded_gemini_file = None
     try:
-        # 1. Upload the file to Gemini's Native Storage API
         uploaded_gemini_file = genai.upload_file(path=file_path, mime_type=mime_type)
-        
-        # 2. Pass the file token direct to the model inside the content payload array
         response = model.generate_content([system_prompt + user_prompt, uploaded_gemini_file])
-        
         return response.text if response.text else "Failed to deliver structured text. Please upload another file or image."
-        
     except Exception as ai_err:
         error_msg = str(ai_err)
         logger.error(f"Gemini API Error: {error_msg}", exc_info=True)
@@ -77,12 +72,28 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
                 detail="Oops! Something went wrong. Please try again."
             )
     finally:
-        # 3. Always clean up files from Google Storage immediately after the prompt completes
         if uploaded_gemini_file:
             try:
                 genai.delete_file(name=uploaded_gemini_file.name)
             except Exception as clean_err:
                 logger.warning(f"Failed to delete file {uploaded_gemini_file.name}: {clean_err}")
+
+
+@smart_notes_router.post("/limit-status", status_code=status.HTTP_200_OK)
+async def get_smart_notes_limit_status(payload: dict):
+    """Get the current rate limit status for smart notes."""
+    uid = payload.get("uid")
+    if not uid:
+        raise HTTPException(status_code=400, detail="Missing user UID")
+    
+    limit_status = check_rate_limit_status(uid, "smart_notes", max_limit=2)
+    return {
+        "status": "success",
+        "slots_remaining": limit_status["remaining"],
+        "used": limit_status.get("used", 0),
+        "available": limit_status["available"],
+        "reset_at": limit_status["reset_at"]
+    }
 
 
 @smart_notes_router.post("/summarize", status_code=status.HTTP_200_OK)
@@ -93,7 +104,6 @@ async def summarize_document(
 ):
     filename_lower = file.filename.lower()
     
-    # Map file extensions directly to their real MIME types for Google's engine
     mime_mapping = {
         '.pdf': 'application/pdf',
         '.txt': 'text/plain',
@@ -111,14 +121,22 @@ async def summarize_document(
         )
 
     # 1. ENFORCE APP RATE LIMITER FIRST
-    # This will raise HTTPException if limit is exceeded or database error occurs
-    slots_remaining = enforce_feature_limit(uid, "smart_notes", max_limit=2)
+    try:
+        slots_remaining = enforce_feature_limit(uid, "smart_notes", max_limit=2)
+    except HTTPException as e:
+        if e.status_code == 429:
+            # Get the reset time from the status check
+            limit_status = check_rate_limit_status(uid, "smart_notes", max_limit=2)
+            reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Smart Notes limit reached. You can try again{reset_msg}."
+            )
+        raise e
 
     try:
-        # Read file contents to compute the fingerprint
         file_bytes = await file.read()
         
-        # 2. DATABASE CACHE CHECK
         clean_instruction = instruction.strip().lower()
         content_fingerprint = hashlib.md5(f"{file_bytes[:500000]}_{clean_instruction}".encode('utf-8')).hexdigest()
         
@@ -146,7 +164,6 @@ async def summarize_document(
                 "slots_remaining": slots_remaining
             }
 
-        # 3. CACHE MISS -> Save to a secure temp file to stream directly to Gemini
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
             tmp_file.write(file_bytes)
             tmp_file_path = tmp_file.name
@@ -158,11 +175,9 @@ async def summarize_document(
                 custom_instruction=instruction
             )
         finally:
-            # Safely eliminate the temporary file from disk local storage
             if os.path.exists(tmp_file_path):
                 os.remove(tmp_file_path)
 
-        # 4. WRITE TO DB
         note_data = {
             "user_uid": uid,
             "title": file.filename,

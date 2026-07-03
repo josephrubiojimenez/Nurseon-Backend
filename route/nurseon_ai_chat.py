@@ -25,8 +25,8 @@ if GEMINI_API_KEY:
 
 # --- Pydantic Schemas to Match Frontend Contracts ---
 class MessageLog(BaseModel):
-    role: str  # Frontend uses 'user' or 'model'
-    parts: str # Frontend matches Gemini raw layout format string
+    role: str
+    parts: str
 
 class ChatPayload(BaseModel):
     uid: str
@@ -41,7 +41,6 @@ class RenamePayload(BaseModel):
 def convert_history_to_gemini(frontend_history: List[MessageLog]) -> list:
     gemini_contents = []
     for msg in frontend_history:
-        # Maps frontend 'model' role back into GenAI SDK expected 'model' or 'assistant' format seamlessly
         role_type = "model" if msg.role == "model" else "user"
         gemini_contents.append(
             types.Content(
@@ -53,22 +52,30 @@ def convert_history_to_gemini(frontend_history: List[MessageLog]) -> list:
 
 
 @nurseon_ai_chat_router.post("/chat", status_code=status.HTTP_200_OK)
-@limiter.limit("10/minute")
+@limiter.limit("5/minute")
 async def process_nurseon_chat(request: Request, payload: ChatPayload):
     if not genai_client:
         raise HTTPException(status_code=500, detail="AI Core Core Engine offline.")
 
-    # Enforce standard chat limit (10 queries per rolling window baseline)
-    slots_remaining = enforce_feature_limit(payload.uid, "nurseon_ai_chat", max_limit=5)
+    # Enforce standard chat limit (5 queries per 24-hour window)
+    try:
+        slots_remaining = enforce_feature_limit(payload.uid, "nurseon_ai_chat", max_limit=5)
+    except HTTPException as e:
+        if e.status_code == 429:
+            # Get the reset time from the status check
+            limit_status = check_rate_limit_status(payload.uid, "nurseon_ai_chat", max_limit=5)
+            reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"AI Chat limit reached. You can try again{reset_msg}."
+            )
+        raise e
 
     session_id = payload.session_id or f"chat_{int(datetime.now(timezone.utc).timestamp())}"
     user_message = payload.message
     now = datetime.now(timezone.utc)
 
-    # Convert the payload history list into acceptable content objects
     sdk_contents = convert_history_to_gemini(payload.history)
-    
-    # Append current input question turning step
     sdk_contents.append(
         types.Content(role="user", parts=[types.Part.from_text(text=user_message)])
     )
@@ -79,7 +86,6 @@ async def process_nurseon_chat(request: Request, payload: ChatPayload):
     )
 
     try:
-        # Call modern content generation framework
         response = genai_client.models.generate_content(
             model="gemini-2.5-flash",
             contents=sdk_contents,
@@ -91,7 +97,6 @@ async def process_nurseon_chat(request: Request, payload: ChatPayload):
 
         ai_reply = response.text if response.text else "I am processing your clinical record, please re-submit your inquiry."
 
-        # Save session history block synchronously to Firestore database
         session_ref = db.collection("users").document(payload.uid).collection("chat_sessions").document(session_id)
         session_snap = session_ref.get()
 
@@ -108,7 +113,6 @@ async def process_nurseon_chat(request: Request, payload: ChatPayload):
                 "last_active": now
             })
         else:
-            # Generate auto-title summary based on first prompt cut length
             auto_title = user_message[:30] + "..." if len(user_message) > 30 else user_message
             session_ref.set({
                 "id": session_id,
@@ -119,7 +123,6 @@ async def process_nurseon_chat(request: Request, payload: ChatPayload):
                 "last_active": now
             })
 
-        # Return exact names expected by NurseonAIChat.tsx updates
         return {
             "status": "success",
             "reply": ai_reply,
@@ -132,9 +135,11 @@ async def process_nurseon_chat(request: Request, payload: ChatPayload):
         logger.error(f"Chat communication fault: {error_msg}", exc_info=True)
         
         if "429" in error_msg or "quota" in error_msg.lower():
+            limit_status = check_rate_limit_status(payload.uid, "nurseon_ai_chat", max_limit=5)
+            reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="The AI generation engine is temporarily saturated. Please try again in 1 minute."
+                detail=f"AI Chat limit reached. You can try again{reset_msg}."
             )
         elif "api_key" in error_msg.lower() or "invalid" in error_msg.lower():
             raise HTTPException(
@@ -159,13 +164,13 @@ async def check_chat_limits(payload: dict):
     if not uid:
         raise HTTPException(status_code=400, detail="Missing user payload reference ID.")
     
-    # Check limit without incrementing using the safe status checker
-    limit_status = check_rate_limit_status(uid, "nurseon_ai_chat", max_limit=10)
+    limit_status = check_rate_limit_status(uid, "nurseon_ai_chat", max_limit=5)
     
     return {
-        "status": "success", 
+        "status": "success",
         "limit_remaining": limit_status["remaining"],
         "available": limit_status["available"],
+        "used": limit_status.get("used", 0),
         "reset_at": limit_status["reset_at"]
     }
 
@@ -174,7 +179,6 @@ async def check_chat_limits(payload: dict):
 async def get_chat_history(uid: str):
     try:
         sessions_ref = db.collection("users").document(uid).collection("chat_sessions")
-        # Pull records sorted by interaction timelines
         docs = sessions_ref.order_by("last_active", direction="DESCENDING").stream()
         
         sessions_list = []
@@ -217,6 +221,7 @@ async def get_single_session(uid: str, session_id: str):
     except Exception as e:
         logger.error(f"Failed to fetch session {session_id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Could not pull your conversation log right now.")
+
 
 @nurseon_ai_chat_router.put("/history/{uid}/{session_id}/pin", status_code=status.HTTP_200_OK)
 async def toggle_pin_status(uid: str, session_id: str, payload: dict):
