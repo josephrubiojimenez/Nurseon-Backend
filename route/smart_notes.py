@@ -59,7 +59,7 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         elif "api_key" in error_msg.lower() or "invalid" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Our AI assistant is taking a break. Please try again in a few minutes."
+                detail="Smart Notes is taking a break. Please try again in a few minutes."
             )
         elif "timeout" in error_msg.lower() or "deadline" in error_msg.lower():
             raise HTTPException(
