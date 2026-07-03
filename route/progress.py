@@ -42,6 +42,10 @@ async def get_user_progress(uid: str):
                 "overallBoardScore": 0,
                 "studyStreak": 0,
                 "timeSpentHours": 0,
+                "slotsRemaining": 5,
+                "used": 0,
+                "available": True,
+                "reset_at": None,
                 "weaknesses": [],
                 "weaknessRecommendation": "Complete more activities to get personalized insights"
             }
@@ -57,6 +61,7 @@ async def get_user_progress(uid: str):
         # Get quiz data
         quiz_scores = data.get("quiz_scores", [])
         avg_quiz_score = round(sum(quiz_scores) / len(quiz_scores), 2) if quiz_scores else 0
+        quizzes_answered = data.get("quizzes_answered", 0)
         
         # Get case study scores for accuracy
         case_study_scores = data.get("case_study_scores", [])
@@ -76,7 +81,7 @@ async def get_user_progress(uid: str):
         limit_status = check_rate_limit_status(uid, "case_studies", max_limit=5)
         
         return {
-            "quizzesAnswered": data.get("quizzes_answered", 0),
+            "quizzesAnswered": quizzes_answered,
             "totalQuizzes": 50,
             "caseStudyPoints": case_study_points,
             "maxCaseStudyPoints": MAX_CASE_STUDY_POINTS,
@@ -88,10 +93,13 @@ async def get_user_progress(uid: str):
             "overallBoardScore": data.get("overall_board_score", 0),
             "studyStreak": data.get("study_streak", 0),
             "timeSpentHours": data.get("time_spent_hours", 0),
-            "dailyLimitRemaining": limit_status.get("remaining", 5),
+            "slotsRemaining": limit_status.get("remaining", 5),
+            "used": limit_status.get("used", 0),
+            "available": limit_status.get("available", True),
+            "reset_at": limit_status.get("reset_at", None),
             "weaknesses": data.get("weaknesses", []),
             "weaknessRecommendation": data.get("weakness_recommendation", 
-                "Keep studying and complete more case studies to identify weak areas!")
+                "Keep studying and complete more activities to identify weak areas!")
         }
         
     except Exception as e:
@@ -190,4 +198,169 @@ async def update_case_study_progress(payload: dict):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update progress"
+        )
+
+
+@progress_router.post("/update-quiz")
+async def update_quiz_progress(payload: dict):
+    """
+    Update progress when a quiz is completed.
+    """
+    try:
+        uid = payload.get("uid")
+        score = payload.get("score", 0)
+        questions_answered = payload.get("questions_answered", 0)
+        
+        if not uid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User UID is required"
+            )
+        
+        progress_ref = db.collection("user_progress").document(uid)
+        doc = progress_ref.get()
+        current_data = doc.to_dict() if doc.exists else {}
+        
+        # Prepare update data
+        current_answered = current_data.get("quizzes_answered", 0)
+        update_data = {
+            "quizzes_answered": current_answered + questions_answered,
+            "last_updated": datetime.now(timezone.utc)
+        }
+        
+        # Add quiz score
+        if score > 0:
+            quiz_scores = current_data.get("quiz_scores", [])
+            quiz_scores.append(score)
+            update_data["quiz_scores"] = quiz_scores
+            
+            # Update average quiz score
+            if quiz_scores:
+                update_data["average_quiz_score"] = round(sum(quiz_scores) / len(quiz_scores), 2)
+        
+        # Update study streak
+        last_study_date = current_data.get("last_study_date")
+        today_datetime = datetime.now(timezone.utc)
+        today_date = today_datetime.date()
+        
+        if last_study_date:
+            last_date = last_study_date.date() if hasattr(last_study_date, 'date') else last_study_date
+            if isinstance(last_date, datetime):
+                last_date = last_date.date()
+            
+            days_diff = (today_date - last_date).days
+            if days_diff == 1:
+                update_data["study_streak"] = current_data.get("study_streak", 0) + 1
+            elif days_diff > 1:
+                update_data["study_streak"] = 1
+        else:
+            update_data["study_streak"] = 1
+        
+        update_data["last_study_date"] = today_datetime
+        
+        # Update time spent (10 minutes per quiz)
+        update_data["time_spent_hours"] = current_data.get("time_spent_hours", 0) + 0.17
+        
+        # Commit update
+        progress_ref.set(update_data, merge=True)
+        
+        logger.info(f"✅ Updated quiz progress for user {uid}: +{questions_answered} questions, score: {score}%")
+        
+        return {
+            "success": True,
+            "message": "Quiz progress updated successfully",
+            "quizzes_answered": update_data["quizzes_answered"],
+            "average_quiz_score": update_data.get("average_quiz_score", 0)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating quiz progress: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update quiz progress"
+        )
+
+
+@progress_router.post("/update-mock-exam")
+async def update_mock_exam_progress(payload: dict):
+    """
+    Update progress when a mock exam is completed.
+    """
+    try:
+        uid = payload.get("uid")
+        score = payload.get("score", 0)
+        
+        if not uid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User UID is required"
+            )
+        
+        progress_ref = db.collection("user_progress").document(uid)
+        doc = progress_ref.get()
+        current_data = doc.to_dict() if doc.exists else {}
+        
+        # Prepare update data
+        update_data = {
+            "mock_exams_taken": current_data.get("mock_exams_taken", 0) + 1,
+            "last_updated": datetime.now(timezone.utc)
+        }
+        
+        # Update board scores
+        if score > 0:
+            update_data["latest_board_score"] = score
+            
+            # Update overall board score (average)
+            board_scores = current_data.get("board_scores", [])
+            board_scores.append(score)
+            update_data["board_scores"] = board_scores
+            
+            if board_scores:
+                update_data["overall_board_score"] = round(sum(board_scores) / len(board_scores), 2)
+        
+        # Update study streak
+        last_study_date = current_data.get("last_study_date")
+        today_datetime = datetime.now(timezone.utc)
+        today_date = today_datetime.date()
+        
+        if last_study_date:
+            last_date = last_study_date.date() if hasattr(last_study_date, 'date') else last_study_date
+            if isinstance(last_date, datetime):
+                last_date = last_date.date()
+            
+            days_diff = (today_date - last_date).days
+            if days_diff == 1:
+                update_data["study_streak"] = current_data.get("study_streak", 0) + 1
+            elif days_diff > 1:
+                update_data["study_streak"] = 1
+        else:
+            update_data["study_streak"] = 1
+        
+        update_data["last_study_date"] = today_datetime
+        
+        # Update time spent (1 hour per mock exam)
+        update_data["time_spent_hours"] = current_data.get("time_spent_hours", 0) + 1
+        
+        # Commit update
+        progress_ref.set(update_data, merge=True)
+        
+        logger.info(f"✅ Updated mock exam progress for user {uid}: score: {score}%")
+        
+        return {
+            "success": True,
+            "message": "Mock exam progress updated successfully",
+            "mock_exams_taken": update_data["mock_exams_taken"],
+            "latest_board_score": update_data.get("latest_board_score", 0),
+            "overall_board_score": update_data.get("overall_board_score", 0)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating mock exam progress: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update mock exam progress"
         )
