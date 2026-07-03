@@ -59,7 +59,7 @@ async def process_nurseon_chat(request: Request, payload: ChatPayload):
         raise HTTPException(status_code=500, detail="AI Core Core Engine offline.")
 
     # Enforce standard chat limit (10 queries per rolling window baseline)
-    slots_remaining = enforce_feature_limit(payload.uid, "nurseon_ai_chat", max_limit=10)
+    slots_remaining = enforce_feature_limit(payload.uid, "nurseon_ai_chat", max_limit=5)
 
     session_id = payload.session_id or f"chat_{int(datetime.now(timezone.utc).timestamp())}"
     user_message = payload.message
