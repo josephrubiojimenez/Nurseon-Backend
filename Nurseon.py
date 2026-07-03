@@ -48,7 +48,7 @@ origins = [
     "http://127.0.0.1:5174",
     "http://localhost:3000",      # Local React standard port
     "http://127.0.0.1:3000",
-    "https://nurseon.vercel.app", 
+    "https://nurseon-i179.vercel.app", 
 ]
 
 app.add_middleware(
