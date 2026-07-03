@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 import google.generativeai as genai
-from google.cloud.firestore import Increment
 
 from database.firebase import db
 from utils.limiters import enforce_feature_limit
@@ -31,7 +30,7 @@ class EvaluationPayload(BaseModel):
     uid: str
     patient_scenario: str
     student_response: str
-    difficulty: str = "Standard"  # Added to track difficulty
+    difficulty: str = "Standard"  # Added to track difficulty for points
 
 # --- Gemini Structured Output Definitions ---
 
@@ -166,7 +165,9 @@ def run_gemini_evaluation(scenario: str, response_text: str) -> dict:
 
 def update_user_progress(uid: str, difficulty: str, score: int = None):
     """
-    Update user progress for case studies.
+    Update user progress for case studies with points-based system.
+    Easy = 10 points, Standard = 20 points, Hard = 30 points
+    Max points = 100
     """
     try:
         progress_ref = db.collection("user_progress").document(uid)
@@ -175,17 +176,17 @@ def update_user_progress(uid: str, difficulty: str, score: int = None):
         doc = progress_ref.get()
         current_data = doc.to_dict() if doc.exists else {}
         
-        # Increment case studies completed
-        case_studies_completed = current_data.get("case_studies_completed", 0) + 1
-        
         # Calculate points based on difficulty
         points = difficulty_points.get(difficulty, 20)
         
+        # Calculate new total points
+        current_points = current_data.get("total_case_study_points", 0)
+        new_points = current_points + points
+        
         # Update the document
         update_data = {
-            "case_studies_completed": case_studies_completed,
-            "last_updated": datetime.now(timezone.utc),
-            "total_case_study_points": current_data.get("total_case_study_points", 0) + points
+            "total_case_study_points": new_points,
+            "last_updated": datetime.now(timezone.utc)
         }
         
         # If score is provided, update accuracy
@@ -200,9 +201,9 @@ def update_user_progress(uid: str, difficulty: str, score: int = None):
                 update_data["overall_case_study_accuracy"] = round(avg_score, 2)
         
         progress_ref.set(update_data, merge=True)
-        logger.info(f"✅ Updated progress for user {uid}: {case_studies_completed} case studies completed")
+        logger.info(f"✅ Updated progress for user {uid}: +{points} points (Total: {new_points})")
         
-        return case_studies_completed
+        return new_points
         
     except Exception as e:
         logger.error(f"Failed to update progress for user {uid}: {str(e)}", exc_info=True)

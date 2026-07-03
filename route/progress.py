@@ -9,7 +9,7 @@ progress_router = APIRouter()
 
 # Configuration Constants
 DAILY_CASE_STUDY_LIMIT = 5  # Daily limit for case studies
-TOTAL_CASE_STUDIES_AVAILABLE = 20  # Total case studies available in the system
+MAX_CASE_STUDY_POINTS = 100  # Maximum points to reach 100% progress
 
 # Difficulty points mapping
 DIFFICULTY_POINTS = {
@@ -32,8 +32,9 @@ async def get_user_progress(uid: str):
             return {
                 "quizzesAnswered": 0,
                 "totalQuizzes": 50,
-                "caseStudiesCompleted": 0,
-                "totalCaseStudies": TOTAL_CASE_STUDIES_AVAILABLE,  # Use constant
+                "caseStudyPoints": 0,
+                "maxCaseStudyPoints": MAX_CASE_STUDY_POINTS,
+                "caseProgressPercent": 0,
                 "mockExamsTaken": 0,
                 "totalMockExams": 5,
                 "overallAccuracy": 0,
@@ -41,22 +42,26 @@ async def get_user_progress(uid: str):
                 "overallBoardScore": 0,
                 "studyStreak": 0,
                 "timeSpentHours": 0,
-                "caseStudyPoints": 0,
-                "dailyLimitRemaining": DAILY_CASE_STUDY_LIMIT,  # Add daily limit
+                "dailyLimitRemaining": DAILY_CASE_STUDY_LIMIT,
                 "weaknesses": [],
                 "weaknessRecommendation": "Complete more activities to get personalized insights"
             }
         
         data = doc.to_dict()
         
-        # Calculate derived metrics
-        case_studies_completed = data.get("case_studies_completed", 0)
-        case_study_scores = data.get("case_study_scores", [])
-        avg_case_score = round(sum(case_study_scores) / len(case_study_scores), 2) if case_study_scores else 0
+        # Get case study points
+        case_study_points = data.get("total_case_study_points", 0)
+        
+        # Calculate progress percentage (cap at 100%)
+        case_progress_percent = min(100, round((case_study_points / MAX_CASE_STUDY_POINTS) * 100))
         
         # Get quiz data
         quiz_scores = data.get("quiz_scores", [])
         avg_quiz_score = round(sum(quiz_scores) / len(quiz_scores), 2) if quiz_scores else 0
+        
+        # Get case study scores for accuracy
+        case_study_scores = data.get("case_study_scores", [])
+        avg_case_score = round(sum(case_study_scores) / len(case_study_scores), 2) if case_study_scores else 0
         
         # Calculate overall accuracy (weighted average)
         if case_study_scores and quiz_scores:
@@ -78,8 +83,9 @@ async def get_user_progress(uid: str):
         return {
             "quizzesAnswered": data.get("quizzes_answered", 0),
             "totalQuizzes": 50,
-            "caseStudiesCompleted": min(case_studies_completed, TOTAL_CASE_STUDIES_AVAILABLE),  # Cap at total available
-            "totalCaseStudies": TOTAL_CASE_STUDIES_AVAILABLE,
+            "caseStudyPoints": case_study_points,
+            "maxCaseStudyPoints": MAX_CASE_STUDY_POINTS,
+            "caseProgressPercent": case_progress_percent,
             "mockExamsTaken": data.get("mock_exams_taken", 0),
             "totalMockExams": 5,
             "overallAccuracy": overall_accuracy,
@@ -87,8 +93,7 @@ async def get_user_progress(uid: str):
             "overallBoardScore": data.get("overall_board_score", 0),
             "studyStreak": data.get("study_streak", 0),
             "timeSpentHours": data.get("time_spent_hours", 0),
-            "caseStudyPoints": data.get("total_case_study_points", 0),
-            "dailyLimitRemaining": daily_limit_remaining,  # Return daily limit remaining
+            "dailyLimitRemaining": daily_limit_remaining,
             "weaknesses": data.get("weaknesses", []),
             "weaknessRecommendation": data.get("weakness_recommendation", 
                 "Keep studying and complete more case studies to identify weak areas!")
@@ -138,10 +143,13 @@ async def update_case_study_progress(payload: dict):
                 detail="Daily case study limit reached. Please try again tomorrow."
             )
         
+        # Calculate new total points
+        current_points = current_data.get("total_case_study_points", 0)
+        new_points = current_points + points
+        
         # Prepare update data
         update_data = {
-            "case_studies_completed": current_data.get("case_studies_completed", 0) + 1,
-            "total_case_study_points": current_data.get("total_case_study_points", 0) + points,
+            "total_case_study_points": new_points,
             "last_updated": datetime.now(timezone.utc)
         }
         
@@ -174,7 +182,6 @@ async def update_case_study_progress(payload: dict):
                 update_data["study_streak"] = current_data.get("study_streak", 0) + 1
             elif days_diff > 1:
                 update_data["study_streak"] = 1
-            # else: same day, don't update streak
         else:
             update_data["study_streak"] = 1
         
@@ -186,13 +193,20 @@ async def update_case_study_progress(payload: dict):
         # Commit update
         progress_ref.set(update_data, merge=True)
         
-        logger.info(f"✅ Updated case study progress for user {uid}")
+        # Calculate remaining daily limit after update
+        remaining = DAILY_CASE_STUDY_LIMIT - (used_today + 1)
+        
+        # Calculate progress percentage
+        progress_percent = min(100, round((new_points / MAX_CASE_STUDY_POINTS) * 100))
+        
+        logger.info(f"✅ Updated case study progress for user {uid}: {new_points} points ({progress_percent}%)")
         
         return {
             "success": True,
             "message": "Progress updated successfully",
-            "case_studies_completed": update_data["case_studies_completed"],
-            "daily_limit_remaining": DAILY_CASE_STUDY_LIMIT - (used_today + 1)
+            "case_study_points": new_points,
+            "case_progress_percent": progress_percent,
+            "daily_limit_remaining": remaining
         }
         
     except HTTPException:
