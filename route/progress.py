@@ -80,6 +80,15 @@ async def get_user_progress(uid: str):
         # Get case study limit status using the new limiter
         limit_status = check_rate_limit_status(uid, "case_studies", max_limit=5)
         
+        # Get weaknesses from data, ensure it's a list
+        weaknesses = data.get("weaknesses", [])
+        if not isinstance(weaknesses, list):
+            weaknesses = []
+        
+        # Get recommendation
+        recommendation = data.get("weakness_recommendation", 
+            "Keep studying and complete more activities to identify weak areas!")
+        
         return {
             "quizzesAnswered": quizzes_answered,
             "totalQuizzes": 50,
@@ -97,9 +106,8 @@ async def get_user_progress(uid: str):
             "used": limit_status.get("used", 0),
             "available": limit_status.get("available", True),
             "reset_at": limit_status.get("reset_at", None),
-            "weaknesses": data.get("weaknesses", []),
-            "weaknessRecommendation": data.get("weakness_recommendation", 
-                "Keep studying and complete more activities to identify weak areas!")
+            "weaknesses": weaknesses,
+            "weaknessRecommendation": recommendation
         }
         
     except Exception as e:
@@ -287,10 +295,13 @@ async def update_quiz_progress(payload: dict):
 async def update_mock_exam_progress(payload: dict):
     """
     Update progress when a mock exam is completed.
+    Also updates weaknesses and recommendations.
     """
     try:
         uid = payload.get("uid")
         score = payload.get("score", 0)
+        weaknesses = payload.get("weaknesses", [])
+        recommendation = payload.get("recommendation", "")
         
         if not uid:
             raise HTTPException(
@@ -320,6 +331,25 @@ async def update_mock_exam_progress(payload: dict):
             if board_scores:
                 update_data["overall_board_score"] = round(sum(board_scores) / len(board_scores), 2)
         
+        # Update weaknesses if provided
+        if weaknesses:
+            # Merge with existing weaknesses or replace
+            existing_weaknesses = current_data.get("weaknesses", [])
+            if existing_weaknesses:
+                # Combine and deduplicate by subject
+                subject_map = {}
+                for w in existing_weaknesses:
+                    subject_map[w.get("subject")] = w
+                for w in weaknesses:
+                    subject_map[w.get("subject")] = w
+                update_data["weaknesses"] = list(subject_map.values())
+            else:
+                update_data["weaknesses"] = weaknesses
+        
+        # Update recommendation if provided
+        if recommendation:
+            update_data["weakness_recommendation"] = recommendation
+        
         # Update study streak
         last_study_date = current_data.get("last_study_date")
         today_datetime = datetime.now(timezone.utc)
@@ -346,14 +376,16 @@ async def update_mock_exam_progress(payload: dict):
         # Commit update
         progress_ref.set(update_data, merge=True)
         
-        logger.info(f"✅ Updated mock exam progress for user {uid}: score: {score}%")
+        logger.info(f"✅ Updated mock exam progress for user {uid}: score: {score}%, weaknesses: {len(weaknesses)} areas")
         
         return {
             "success": True,
             "message": "Mock exam progress updated successfully",
             "mock_exams_taken": update_data["mock_exams_taken"],
             "latest_board_score": update_data.get("latest_board_score", 0),
-            "overall_board_score": update_data.get("overall_board_score", 0)
+            "overall_board_score": update_data.get("overall_board_score", 0),
+            "weaknesses": update_data.get("weaknesses", []),
+            "weakness_recommendation": update_data.get("weakness_recommendation", "")
         }
         
     except HTTPException:
@@ -363,4 +395,67 @@ async def update_mock_exam_progress(payload: dict):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update mock exam progress"
+        )
+
+
+@progress_router.post("/update-weaknesses")
+async def update_weaknesses(payload: dict):
+    """
+    Update weaknesses and recommendations for a user.
+    This can be called separately after exam analysis.
+    """
+    try:
+        uid = payload.get("uid")
+        weaknesses = payload.get("weaknesses", [])
+        recommendation = payload.get("recommendation", "")
+        
+        if not uid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User UID is required"
+            )
+        
+        progress_ref = db.collection("user_progress").document(uid)
+        doc = progress_ref.get()
+        current_data = doc.to_dict() if doc.exists else {}
+        
+        update_data = {
+            "last_updated": datetime.now(timezone.utc)
+        }
+        
+        # Merge weaknesses
+        if weaknesses:
+            existing_weaknesses = current_data.get("weaknesses", [])
+            if existing_weaknesses:
+                # Combine and deduplicate by subject
+                subject_map = {}
+                for w in existing_weaknesses:
+                    subject_map[w.get("subject")] = w
+                for w in weaknesses:
+                    subject_map[w.get("subject")] = w
+                update_data["weaknesses"] = list(subject_map.values())
+            else:
+                update_data["weaknesses"] = weaknesses
+        
+        if recommendation:
+            update_data["weakness_recommendation"] = recommendation
+        
+        progress_ref.set(update_data, merge=True)
+        
+        logger.info(f"✅ Updated weaknesses for user {uid}: {len(weaknesses)} areas")
+        
+        return {
+            "success": True,
+            "message": "Weaknesses updated successfully",
+            "weaknesses": update_data.get("weaknesses", []),
+            "weakness_recommendation": update_data.get("weakness_recommendation", "")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating weaknesses: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update weaknesses"
         )
