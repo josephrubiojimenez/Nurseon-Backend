@@ -36,7 +36,7 @@ async def get_user_progress(uid: str):
                 "maxCaseStudyPoints": MAX_CASE_STUDY_POINTS,
                 "caseProgressPercent": 0,
                 "mockExamsTaken": 0,
-                "totalMockExams": 5,
+                "totalMockExams": 1,
                 "overallAccuracy": 0,
                 "latestBoardScore": 0,
                 "overallBoardScore": 0,
@@ -96,7 +96,7 @@ async def get_user_progress(uid: str):
             "maxCaseStudyPoints": MAX_CASE_STUDY_POINTS,
             "caseProgressPercent": case_progress_percent,
             "mockExamsTaken": data.get("mock_exams_taken", 0),
-            "totalMockExams": 5,
+            "totalMockExams": 1,
             "overallAccuracy": overall_accuracy,
             "latestBoardScore": data.get("latest_board_score", 0),
             "overallBoardScore": data.get("overall_board_score", 0),
@@ -122,50 +122,53 @@ async def get_user_progress(uid: str):
 async def update_case_study_progress(payload: dict):
     """
     Update progress when a case study is completed.
-    Only awards points if the user passes with a score >= 75%.
+    Strictly awards points ONLY if the score is >= 75%.
     """
     try:
         uid = payload.get("uid")
         difficulty = payload.get("difficulty", "Standard")
-        score = payload.get("score")
+        
+        # Explicitly fallback to 0 if score is missing or malformed
+        try:
+            score = float(payload.get("score", 0))
+        except (ValueError, TypeError):
+            score = 0
         
         if not uid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="User UID is required"
             )
-            
-        if score is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Score is required to calculate progress eligibility"
-            )
         
         progress_ref = db.collection("user_progress").document(uid)
         doc = progress_ref.get()
         current_data = doc.to_dict() if doc.exists else {}
         
-        # Determine points eligibility based on a 75% passing mark
-        is_passing = score >= 75
-        points_to_award = DIFFICULTY_POINTS.get(difficulty, 20) if is_passing else 0
-        
-        # Calculate new total points
+        # STRICT CHECK: Must be 75% or higher to get points
+        if score >= 75:
+            points_to_add = DIFFICULTY_POINTS.get(difficulty, 20)
+            logger.info(f"🎯 User passed with {score}%. Awarding {points_to_add} points.")
+        else:
+            points_to_add = 0
+            logger.info(f"❌ User failed with {score}%. No points awarded.")
+            
+        # Calculate new totals
         current_points = current_data.get("total_case_study_points", 0)
-        new_points = current_points + points_to_award
+        new_points = current_points + points_to_add
         
-        # Prepare update data
+        # Prepare database update payload
         update_data = {
             "total_case_study_points": new_points,
             "last_updated": datetime.now(timezone.utc)
         }
         
-        # Track history score arrays regardless of performance pass/fail
+        # Keep track of all scores for overall historical statistics
         scores = current_data.get("case_study_scores", [])
         scores.append(score)
         update_data["case_study_scores"] = scores
         update_data["average_case_study_score"] = round(sum(scores) / len(scores), 2)
         
-        # Update study streak
+        # Update streak management details
         last_study_date = current_data.get("last_study_date")
         today_datetime = datetime.now(timezone.utc)
         today_date = today_datetime.date()
@@ -175,82 +178,86 @@ async def update_case_study_progress(payload: dict):
             if isinstance(last_date, datetime):
                 last_date = last_date.date()
             
-            days_diff = (today_date - last_date).days
-            if days_diff == 1:
+            if (today_date - last_date).days == 1:
                 update_data["study_streak"] = current_data.get("study_streak", 0) + 1
-            elif days_diff > 1:
+            elif (today_date - last_date).days > 1:
                 update_data["study_streak"] = 1
         else:
             update_data["study_streak"] = 1
-        
+            
         update_data["last_study_date"] = today_datetime
         update_data["time_spent_hours"] = current_data.get("time_spent_hours", 0) + 0.25
         
-        # Commit back to database
+        # Commit to Firestore
         progress_ref.set(update_data, merge=True)
         
-        # Calculate progress percentage cap at 100%
         progress_percent = min(100, round((new_points / MAX_CASE_STUDY_POINTS) * 100))
-        
-        logger.info(f"✅ Case Study processed. Passed: {is_passing} ({score}%). Total Points: {new_points} ({progress_percent}%)")
         
         return {
             "success": True,
-            "message": "Progress evaluated and updated successfully",
+            "message": "Progress calculated successfully",
             "case_study_points": new_points,
             "case_progress_percent": progress_percent
         }
         
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error updating case study progress: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update progress"
+            detail="Failed to process case study results"
         )
-
 
 @progress_router.post("/update-quiz")
 async def update_quiz_progress(payload: dict):
     """
-    Update progress when a quiz is completed.
-    Now counts strictly how many questions were answered CORRECTLY (e.g., score vs total).
+    Update quiz progress by accumulating correct answers.
+    Caps the cumulative progress at a maximum total of 50 items.
     """
     try:
         uid = payload.get("uid")
-        score = payload.get("score", 0)  # e.g., 66.67 or 100
-        questions_answered = payload.get("questions_answered", 0)  # Total questions in this session (e.g., 3)
         
+        # 1. Determine correct items to add
+        # Looks for explicit 'correct_count'. If missing, fallback calculates it from score/total
+        if "correct_count" in payload:
+            correct_items_added = int(payload.get("correct_count", 0))
+        else:
+            score = float(payload.get("score", 0))  # e.g., percentage like 10.0 for 2/20
+            total_items = int(payload.get("questions_answered", 20))
+            correct_items_added = round((score / 100) * total_items)
+
         if not uid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="User UID is required"
             )
             
-        # Calculate explicit count of correct answers: (Percent / 100) * total questions
-        correct_answers_count = round((score / 100) * questions_answered)
-        
         progress_ref = db.collection("user_progress").document(uid)
         doc = progress_ref.get()
         current_data = doc.to_dict() if doc.exists else {}
         
-        # Add only the correct answers towards the completed metric milestone
-        current_correct_total = current_data.get("quizzes_answered", 0)
-        new_correct_total = current_correct_total + correct_answers_count
+        # 2. Accumulate correct answers into the pool
+        current_correct_pool = current_data.get("quizzes_answered", 0) # This is your 2/50 tracker
+        new_correct_pool = current_correct_pool + correct_items_added
         
+        # Enforce strict maximum boundary cap of 50 items
+        MAX_QUIZ_ITEMS = 50
+        if new_correct_pool > MAX_QUIZ_ITEMS:
+            new_correct_pool = MAX_QUIZ_ITEMS
+            
+        # 3. Prepare database payload
         update_data = {
-            "quizzes_answered": new_correct_total,
+            "quizzes_answered": new_correct_pool, # Your Firestore field driving the UI bar
             "last_updated": datetime.now(timezone.utc)
         }
         
-        # Append score tracking index
-        quiz_scores = current_data.get("quiz_scores", [])
-        quiz_scores.append(score)
-        update_data["quiz_scores"] = quiz_scores
-        update_data["average_quiz_score"] = round(sum(quiz_scores) / len(quiz_scores), 2)
+        # Optional: Save historical percentages to calculate an overall average score later
+        if "score" in payload:
+            quiz_scores = current_data.get("quiz_scores", [])
+            quiz_scores.append(float(payload.get("score")))
+            update_data["quiz_scores"] = quiz_scores
+            update_data["average_quiz_score"] = round(sum(quiz_scores) / len(quiz_scores), 2)
         
-        # Update study streak
+        # Track streak details
         last_study_date = current_data.get("last_study_date")
         today_datetime = datetime.now(timezone.utc)
         today_date = today_datetime.date()
@@ -259,36 +266,33 @@ async def update_quiz_progress(payload: dict):
             last_date = last_study_date.date() if hasattr(last_study_date, 'date') else last_study_date
             if isinstance(last_date, datetime):
                 last_date = last_date.date()
-            
-            days_diff = (today_date - last_date).days
-            if days_diff == 1:
+                
+            if (today_date - last_date).days == 1:
                 update_data["study_streak"] = current_data.get("study_streak", 0) + 1
-            elif days_diff > 1:
+            elif (today_date - last_date).days > 1:
                 update_data["study_streak"] = 1
         else:
             update_data["study_streak"] = 1
             
         update_data["last_study_date"] = today_datetime
-        update_data["time_spent_hours"] = current_data.get("time_spent_hours", 0) + 0.17
         
+        # Commit to Firestore
         progress_ref.set(update_data, merge=True)
         
-        logger.info(f"✅ Quiz processed. Added +{correct_answers_count} correct items. Total correct: {new_correct_total}")
+        logger.info(f"📊 Added +{correct_items_added} correct items. Global Pool Tracker: {new_correct_pool}/{MAX_QUIZ_ITEMS}")
         
         return {
             "success": True,
-            "message": "Quiz progress updated successfully",
-            "quizzes_answered": new_correct_total,
-            "average_quiz_score": update_data["average_quiz_score"]
+            "message": "Quiz progress pool updated successfully",
+            "quizzes_answered": new_correct_pool,
+            "max_quiz_items": MAX_QUIZ_ITEMS
         }
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error updating quiz progress: {str(e)}", exc_info=True)
+        logger.error(f"Error updating quiz progress pool: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update quiz progress"
+            detail="Failed to process quiz results"
         )
 
 @progress_router.post("/update-mock-exam")
