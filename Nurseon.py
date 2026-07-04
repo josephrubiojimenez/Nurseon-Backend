@@ -23,7 +23,7 @@ from route.progress import progress_router
 # Import the router alongside its internal instantiated limiter configuration instance
 from route.nurseon_ai_chat import nurseon_ai_chat_router, limiter
 from route.mock_board_exam import mock_board_exam_router
-from route.nursing_care_plans import nursing_care_plans_router  # Add this import
+from route.nursing_care_plans import nursing_care_plans_router
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -41,6 +41,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
+# CORS origins - Add more origins for production
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -48,15 +49,23 @@ origins = [
     "http://127.0.0.1:5174",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://nurseon.vercel.app", 
+    "https://nurseon.vercel.app",
+    "https://nurseon.vercel.app/",
+    "https://nurseon-backend.onrender.com",
+    # Add your specific Vercel deployment URL if different
+    os.environ.get("VERCEL_URL", ""),
+    os.environ.get("FRONTEND_URL", ""),
 ]
+
+# Remove empty strings
+origins = [origin for origin in origins if origin]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
 # Registration
@@ -130,11 +139,21 @@ async def root():
         "message": "Nurseon runs successfully"
     }
 
+# Add a health check endpoint
+@app.get("/api/health")
+async def health_check():
+    from datetime import datetime, timezone
+    return {
+        "status": "healthy",
+        "environment": os.environ.get("ENVIRONMENT", "development"),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "Nurseon:app",
-        host="127.0.0.1",
-        port=5000,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
         reload=True
     )
