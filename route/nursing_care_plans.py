@@ -79,22 +79,11 @@ def format_care_plan(doc_id: str, data: dict) -> dict:
 
 @nursing_care_plans_router.post("/create", status_code=status.HTTP_201_CREATED)
 async def create_care_plan(payload: CarePlanCreate):
-    """Create a new nursing care plan."""
+    """Create a new nursing care plan without limits."""
     uid = payload.uid
     care_plan = payload.care_plan
     
     try:
-        # Enforce rate limit (10 per day)
-        try:
-            slots_remaining = enforce_feature_limit(uid, "nursing_care_plans", max_limit=10)
-        except HTTPException as e:
-            if e.status_code == 429:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Daily limit reached. You can create up to 10 care plans per day."
-                )
-            raise e
-        
         now = datetime.now(timezone.utc)
         doc_ref = get_care_plan_collection(uid).document()
         
@@ -121,11 +110,9 @@ async def create_care_plan(payload: CarePlanCreate):
             "message": "Care plan created successfully",
             "id": doc_ref.id,
             "care_plan": format_care_plan(doc_ref.id, data),
-            "slots_remaining": slots_remaining
+            "slots_remaining": None  # Changed to None since limits are removed
         }
         
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error creating care plan: {str(e)}")
         raise HTTPException(
