@@ -130,7 +130,7 @@ async def create_care_plan(payload: CarePlanCreate):
         logger.error(f"Error creating care plan: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create care plan"
+            detail=f"Failed to create care plan: {str(e)}"
         )
 
 
@@ -161,8 +161,8 @@ async def get_care_plans(uid: str, search: Optional[str] = None):
             else:
                 care_plans.append(care_plan)
         
-        # Sort by last_opened (most recent first)
-        care_plans.sort(key=lambda x: x.get("last_opened", ""), reverse=True)
+        # Sort by last_opened (most recent first) - handle None values
+        care_plans.sort(key=lambda x: x.get("last_opened") or x.get("created_at") or "", reverse=True)
         
         return {
             "status": "success",
@@ -172,10 +172,12 @@ async def get_care_plans(uid: str, search: Optional[str] = None):
         
     except Exception as e:
         logger.error(f"Error getting care plans: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get care plans: {str(e)}"
-        )
+        # Return empty list instead of error to prevent UI crash
+        return {
+            "status": "success",
+            "care_plans": [],
+            "total": 0
+        }
 
 
 @nursing_care_plans_router.get("/{uid}/{care_plan_id}")
@@ -478,13 +480,21 @@ async def get_recent_care_plans(uid: str, limit: int = 5):
     """Get most recent care plans for dashboard."""
     try:
         collection = get_care_plan_collection(uid)
-        docs = collection.order_by("last_opened", direction="DESCENDING").limit(limit).stream()
+        
+        # Get all documents and sort in Python instead of using order_by
+        docs = collection.stream()
         
         care_plans = []
         for doc in docs:
             data = doc.to_dict()
             if not data.get("archived", False):
                 care_plans.append(format_care_plan(doc.id, data))
+        
+        # Sort by last_opened (most recent first) - handle None values
+        care_plans.sort(key=lambda x: x.get("last_opened") or x.get("created_at") or "", reverse=True)
+        
+        # Limit results
+        care_plans = care_plans[:limit]
         
         return {
             "status": "success",
@@ -493,7 +503,8 @@ async def get_recent_care_plans(uid: str, limit: int = 5):
         
     except Exception as e:
         logger.error(f"Error getting recent care plans: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get recent care plans: {str(e)}"
-        )
+        # Return empty list instead of error
+        return {
+            "status": "success",
+            "care_plans": []
+        }
