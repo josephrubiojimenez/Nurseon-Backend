@@ -6,6 +6,7 @@ import firebase_admin
 from firebase_admin import auth as firebase_auth
 import logging
 
+
 from route.nurseon_ai_chat import limiter
 from database.firebase import db
 

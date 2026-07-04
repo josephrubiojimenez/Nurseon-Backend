@@ -52,7 +52,7 @@ class CarePlanRename(BaseModel):
 
 def get_care_plan_collection(uid: str):
     """Get the care plans collection reference for a user."""
-    return db.collection("users").document(uid).collection("nursing_care_plans")
+    return db.collection("users_auth").document(uid).collection("nursing_care_plans")
 
 def format_care_plan(doc_id: str, data: dict) -> dict:
     """Format a care plan document for response."""
