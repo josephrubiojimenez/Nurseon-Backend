@@ -25,7 +25,7 @@ class CarePlanData(BaseModel):
     implementation: str = ""
     rationale: str = ""
     evaluation: str = ""
-    status: str = "Draft"  # Draft, In Progress, Completed
+    status: str = "Draft"
 
 class CarePlanCreate(BaseModel):
     uid: str
@@ -45,22 +45,6 @@ class CarePlanUpdate(BaseModel):
 
 class CarePlanRename(BaseModel):
     patient_name: str
-
-class CarePlanResponse(BaseModel):
-    id: str
-    patient_name: str
-    assessment: str
-    diagnosis: str
-    planning: str
-    implementation: str
-    rationale: str
-    evaluation: str
-    status: str
-    created_at: datetime
-    updated_at: datetime
-    last_opened: datetime
-    favorite: bool
-    archived: bool
 
 # ==========================================
 # HELPERS
@@ -151,26 +135,23 @@ async def create_care_plan(payload: CarePlanCreate):
 
 
 @nursing_care_plans_router.get("/list/{uid}")
-async def get_care_plans(uid: str, limit: int = 50, offset: int = 0, search: Optional[str] = None):
+async def get_care_plans(uid: str, search: Optional[str] = None):
     """Get all care plans for a user with optional search."""
     try:
         collection = get_care_plan_collection(uid)
         
-        # Base query - not archived
-        query = collection.where("archived", "==", False)
-        
-        # Order by last_opened (most recent first)
-        query = query.order_by("last_opened", direction="DESCENDING")
-        
-        # Execute query
-        docs = query.limit(limit).offset(offset).stream()
+        # Get all documents from the collection
+        docs = collection.stream()
         
         care_plans = []
         for doc in docs:
             data = doc.to_dict()
+            if data.get("archived", False):
+                continue
+                
             care_plan = format_care_plan(doc.id, data)
             
-            # Apply search filter client-side if provided
+            # Apply search filter if provided
             if search:
                 search_lower = search.lower()
                 if (search_lower in care_plan["patient_name"].lower() or
@@ -180,23 +161,20 @@ async def get_care_plans(uid: str, limit: int = 50, offset: int = 0, search: Opt
             else:
                 care_plans.append(care_plan)
         
-        # Get total count
-        total_query = collection.where("archived", "==", False).stream()
-        total = sum(1 for _ in total_query)
+        # Sort by last_opened (most recent first)
+        care_plans.sort(key=lambda x: x.get("last_opened", ""), reverse=True)
         
         return {
             "status": "success",
             "care_plans": care_plans,
-            "total": total,
-            "limit": limit,
-            "offset": offset
+            "total": len(care_plans)
         }
         
     except Exception as e:
         logger.error(f"Error getting care plans: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get care plans"
+            detail=f"Failed to get care plans: {str(e)}"
         )
 
 
@@ -229,7 +207,7 @@ async def get_care_plan(uid: str, care_plan_id: str):
         logger.error(f"Error getting care plan: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get care plan"
+            detail=f"Failed to get care plan: {str(e)}"
         )
 
 
@@ -277,7 +255,7 @@ async def update_care_plan(uid: str, care_plan_id: str, payload: CarePlanUpdate)
         logger.error(f"Error updating care plan: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update care plan"
+            detail=f"Failed to update care plan: {str(e)}"
         )
 
 
@@ -303,14 +281,14 @@ async def auto_save_care_plan(uid: str, care_plan_id: str, payload: dict):
             if field in payload:
                 update_data[field] = payload[field]
         
-        update_data["updated_at"] = datetime.now(timezone.utc)
-        
-        doc_ref.update(update_data)
+        if update_data:
+            update_data["updated_at"] = datetime.now(timezone.utc)
+            doc_ref.update(update_data)
         
         return {
             "status": "success",
             "message": "Care plan saved successfully",
-            "updated_at": update_data["updated_at"]
+            "updated_at": update_data.get("updated_at")
         }
         
     except HTTPException:
@@ -319,7 +297,7 @@ async def auto_save_care_plan(uid: str, care_plan_id: str, payload: dict):
         logger.error(f"Error auto-saving care plan: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to auto-save care plan"
+            detail=f"Failed to auto-save care plan: {str(e)}"
         )
 
 
@@ -353,7 +331,7 @@ async def rename_care_plan(uid: str, care_plan_id: str, payload: CarePlanRename)
         logger.error(f"Error renaming care plan: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to rename care plan"
+            detail=f"Failed to rename care plan: {str(e)}"
         )
 
 
@@ -422,7 +400,7 @@ async def duplicate_care_plan(uid: str, care_plan_id: str):
         logger.error(f"Error duplicating care plan: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to duplicate care plan"
+            detail=f"Failed to duplicate care plan: {str(e)}"
         )
 
 
@@ -456,7 +434,7 @@ async def delete_care_plan(uid: str, care_plan_id: str):
         logger.error(f"Error deleting care plan: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete care plan"
+            detail=f"Failed to delete care plan: {str(e)}"
         )
 
 
@@ -491,7 +469,7 @@ async def toggle_favorite(uid: str, care_plan_id: str):
         logger.error(f"Error toggling favorite: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to toggle favorite"
+            detail=f"Failed to toggle favorite: {str(e)}"
         )
 
 
@@ -500,15 +478,13 @@ async def get_recent_care_plans(uid: str, limit: int = 5):
     """Get most recent care plans for dashboard."""
     try:
         collection = get_care_plan_collection(uid)
-        
-        query = collection.where("archived", "==", False)
-        query = query.order_by("last_opened", direction="DESCENDING")
-        docs = query.limit(limit).stream()
+        docs = collection.order_by("last_opened", direction="DESCENDING").limit(limit).stream()
         
         care_plans = []
         for doc in docs:
             data = doc.to_dict()
-            care_plans.append(format_care_plan(doc.id, data))
+            if not data.get("archived", False):
+                care_plans.append(format_care_plan(doc.id, data))
         
         return {
             "status": "success",
@@ -519,5 +495,5 @@ async def get_recent_care_plans(uid: str, limit: int = 5):
         logger.error(f"Error getting recent care plans: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get recent care plans"
+            detail=f"Failed to get recent care plans: {str(e)}"
         )

@@ -19,11 +19,11 @@ from route.document import doc_router
 from route.quiz import quiz_router
 from route.case_studies import case_studies_router
 from route.progress import progress_router
-from route.nursing_care_plans import nursing_care_plans_router
 
 # Import the router alongside its internal instantiated limiter configuration instance
 from route.nurseon_ai_chat import nurseon_ai_chat_router, limiter
 from route.mock_board_exam import mock_board_exam_router
+from route.nursing_care_plans import nursing_care_plans_router  # Add this import
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -37,19 +37,18 @@ async def startup_event():
     log_firebase_status()
 
 # --- SlowAPI Global Configuration Setup ---
-# Attach your limiter state to the app context and bind the standard HTTP 429 handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 origins = [
-    "http://localhost:5173",      # Local Vite dev server (older default)
-    "http://127.0.0.1:5173",     # Local Vite dev server alternative
-    "http://localhost:5174",      # Vite may choose alternate port (seen during dev)
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
     "http://127.0.0.1:5174",
-    "http://localhost:3000",      # Local React standard port
+    "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://nurseon-i179.vercel.app", 
+    "https://nurseon.vercel.app", 
 ]
 
 app.add_middleware(
@@ -116,7 +115,7 @@ app.include_router(
     tags=["Progress"]
 )
 
-# Feature - Nursing Care Plans
+# Feature - Nursing Care Plan
 app.include_router(
     nursing_care_plans_router,
     prefix="/api/nursing-care-plans",
