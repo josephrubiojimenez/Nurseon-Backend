@@ -19,6 +19,7 @@ from route.document import doc_router
 from route.quiz import quiz_router
 from route.case_studies import case_studies_router
 from route.progress import progress_router
+from route.nursing_care_plans import nursing_care_plans_router
 
 # Import the router alongside its internal instantiated limiter configuration instance
 from route.nurseon_ai_chat import nurseon_ai_chat_router, limiter
@@ -113,6 +114,13 @@ app.include_router(
     progress_router,
     prefix="/api/progress",
     tags=["Progress"]
+)
+
+# Feature - Nursing Care Plans
+app.include_router(
+    nursing_care_plans_router,
+    prefix="/api/nursing-care-plans",
+    tags=["Nursing Care Plans"]
 )
 
 # HTTP Status
