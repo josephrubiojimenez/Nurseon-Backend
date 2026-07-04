@@ -1,6 +1,8 @@
 import os
 import sys
 from dotenv import load_dotenv
+
+# Load environment variables
 load_dotenv()
 
 from fastapi import FastAPI
@@ -25,6 +27,7 @@ from route.nurseon_ai_chat import nurseon_ai_chat_router, limiter
 from route.mock_board_exam import mock_board_exam_router
 from route.nursing_care_plans import nursing_care_plans_router
 
+# Ensure current directory is in system path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
@@ -36,12 +39,9 @@ app = FastAPI()
 async def startup_event():
     log_firebase_status()
 
-# --- SlowAPI Global Configuration Setup ---
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-app.add_middleware(SlowAPIMiddleware)
-
-# CORS origins - Add more origins for production
+# =================================================================
+# 1. CORS MIDDLEWARE (Must be evaluated first for preflight/OPTIONS)
+# =================================================================
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -50,15 +50,13 @@ origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://nurseon.vercel.app",
-    "https://nurseon.vercel.app/",
     "https://nurseon-backend.onrender.com",
-    # Add your specific Vercel deployment URL if different
     os.environ.get("VERCEL_URL", ""),
     os.environ.get("FRONTEND_URL", ""),
 ]
 
-# Remove empty strings
-origins = [origin for origin in origins if origin]
+# Clean origins array and remove trailing slashes
+origins = [origin.rstrip("/") for origin in origins if origin]
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,7 +66,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Registration
+# =================================================================
+# 2. RATE LIMITER MIDDLEWARE (Evaluated after CORS)
+# =================================================================
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+
+# =================================================================
+# ROUTER REGISTRATIONS
+# =================================================================
+
+# Authentication
 app.include_router(
     auth_router,
     prefix="/api/auth",
@@ -131,7 +141,12 @@ app.include_router(
     tags=["Nursing Care Plans"]
 )
 
-# HTTP Status
+
+# =================================================================
+# SYSTEM ENDPOINTS
+# =================================================================
+
+# Base API Status
 @app.get("/")
 async def root():
     return {
@@ -139,7 +154,7 @@ async def root():
         "message": "Nurseon runs successfully"
     }
 
-# Add a health check endpoint
+# Health Check Endpoint
 @app.get("/api/health")
 async def health_check():
     from datetime import datetime, timezone
@@ -148,6 +163,7 @@ async def health_check():
         "environment": os.environ.get("ENVIRONMENT", "development"),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
+
 
 if __name__ == "__main__":
     import uvicorn
