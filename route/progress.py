@@ -122,6 +122,7 @@ async def get_user_progress(uid: str):
 async def update_case_study_progress(payload: dict):
     """
     Update progress when a case study is completed.
+    Only awards points if the user passes with a score >= 75%.
     """
     try:
         uid = payload.get("uid")
@@ -133,17 +134,24 @@ async def update_case_study_progress(payload: dict):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="User UID is required"
             )
+            
+        if score is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Score is required to calculate progress eligibility"
+            )
         
         progress_ref = db.collection("user_progress").document(uid)
         doc = progress_ref.get()
         current_data = doc.to_dict() if doc.exists else {}
         
-        # Get points for difficulty
-        points = DIFFICULTY_POINTS.get(difficulty, 20)
+        # Determine points eligibility based on a 75% passing mark
+        is_passing = score >= 75
+        points_to_award = DIFFICULTY_POINTS.get(difficulty, 20) if is_passing else 0
         
         # Calculate new total points
         current_points = current_data.get("total_case_study_points", 0)
-        new_points = current_points + points
+        new_points = current_points + points_to_award
         
         # Prepare update data
         update_data = {
@@ -151,15 +159,11 @@ async def update_case_study_progress(payload: dict):
             "last_updated": datetime.now(timezone.utc)
         }
         
-        # Add score if provided
-        if score is not None:
-            scores = current_data.get("case_study_scores", [])
-            scores.append(score)
-            update_data["case_study_scores"] = scores
-            
-            # Update average score
-            if scores:
-                update_data["average_case_study_score"] = round(sum(scores) / len(scores), 2)
+        # Track history score arrays regardless of performance pass/fail
+        scores = current_data.get("case_study_scores", [])
+        scores.append(score)
+        update_data["case_study_scores"] = scores
+        update_data["average_case_study_score"] = round(sum(scores) / len(scores), 2)
         
         # Update study streak
         last_study_date = current_data.get("last_study_date")
@@ -180,21 +184,19 @@ async def update_case_study_progress(payload: dict):
             update_data["study_streak"] = 1
         
         update_data["last_study_date"] = today_datetime
-        
-        # Update time spent (add 15 minutes per case study)
         update_data["time_spent_hours"] = current_data.get("time_spent_hours", 0) + 0.25
         
-        # Commit update
+        # Commit back to database
         progress_ref.set(update_data, merge=True)
         
-        # Calculate progress percentage
+        # Calculate progress percentage cap at 100%
         progress_percent = min(100, round((new_points / MAX_CASE_STUDY_POINTS) * 100))
         
-        logger.info(f"✅ Updated case study progress for user {uid}: {new_points} points ({progress_percent}%)")
+        logger.info(f"✅ Case Study processed. Passed: {is_passing} ({score}%). Total Points: {new_points} ({progress_percent}%)")
         
         return {
             "success": True,
-            "message": "Progress updated successfully",
+            "message": "Progress evaluated and updated successfully",
             "case_study_points": new_points,
             "case_progress_percent": progress_percent
         }
@@ -213,38 +215,40 @@ async def update_case_study_progress(payload: dict):
 async def update_quiz_progress(payload: dict):
     """
     Update progress when a quiz is completed.
+    Now counts strictly how many questions were answered CORRECTLY (e.g., score vs total).
     """
     try:
         uid = payload.get("uid")
-        score = payload.get("score", 0)
-        questions_answered = payload.get("questions_answered", 0)
+        score = payload.get("score", 0)  # e.g., 66.67 or 100
+        questions_answered = payload.get("questions_answered", 0)  # Total questions in this session (e.g., 3)
         
         if not uid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="User UID is required"
             )
+            
+        # Calculate explicit count of correct answers: (Percent / 100) * total questions
+        correct_answers_count = round((score / 100) * questions_answered)
         
         progress_ref = db.collection("user_progress").document(uid)
         doc = progress_ref.get()
         current_data = doc.to_dict() if doc.exists else {}
         
-        # Prepare update data
-        current_answered = current_data.get("quizzes_answered", 0)
+        # Add only the correct answers towards the completed metric milestone
+        current_correct_total = current_data.get("quizzes_answered", 0)
+        new_correct_total = current_correct_total + correct_answers_count
+        
         update_data = {
-            "quizzes_answered": current_answered + questions_answered,
+            "quizzes_answered": new_correct_total,
             "last_updated": datetime.now(timezone.utc)
         }
         
-        # Add quiz score
-        if score > 0:
-            quiz_scores = current_data.get("quiz_scores", [])
-            quiz_scores.append(score)
-            update_data["quiz_scores"] = quiz_scores
-            
-            # Update average quiz score
-            if quiz_scores:
-                update_data["average_quiz_score"] = round(sum(quiz_scores) / len(quiz_scores), 2)
+        # Append score tracking index
+        quiz_scores = current_data.get("quiz_scores", [])
+        quiz_scores.append(score)
+        update_data["quiz_scores"] = quiz_scores
+        update_data["average_quiz_score"] = round(sum(quiz_scores) / len(quiz_scores), 2)
         
         # Update study streak
         last_study_date = current_data.get("last_study_date")
@@ -263,22 +267,19 @@ async def update_quiz_progress(payload: dict):
                 update_data["study_streak"] = 1
         else:
             update_data["study_streak"] = 1
-        
+            
         update_data["last_study_date"] = today_datetime
-        
-        # Update time spent (10 minutes per quiz)
         update_data["time_spent_hours"] = current_data.get("time_spent_hours", 0) + 0.17
         
-        # Commit update
         progress_ref.set(update_data, merge=True)
         
-        logger.info(f"✅ Updated quiz progress for user {uid}: +{questions_answered} questions, score: {score}%")
+        logger.info(f"✅ Quiz processed. Added +{correct_answers_count} correct items. Total correct: {new_correct_total}")
         
         return {
             "success": True,
             "message": "Quiz progress updated successfully",
-            "quizzes_answered": update_data["quizzes_answered"],
-            "average_quiz_score": update_data.get("average_quiz_score", 0)
+            "quizzes_answered": new_correct_total,
+            "average_quiz_score": update_data["average_quiz_score"]
         }
         
     except HTTPException:
@@ -289,7 +290,6 @@ async def update_quiz_progress(payload: dict):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update quiz progress"
         )
-
 
 @progress_router.post("/update-mock-exam")
 async def update_mock_exam_progress(payload: dict):
