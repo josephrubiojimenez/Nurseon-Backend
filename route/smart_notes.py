@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, status
 import google.generativeai as genai
 
 from database.firebase import db
+# Make sure to import deduct_feature_slot (or your equivalent deduction utility method)
 from utils.limiters import enforce_feature_limit, check_rate_limit_status
 
 logger = logging.getLogger("smart_notes")
@@ -64,12 +65,12 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         elif "timeout" in error_msg.lower() or "deadline" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="The AI is thinking too hard. Please try again in a moment."
+                detail="The AI is currently busy thinking. Please try again in a moment without losing your limit."
             )
         else:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Oops! Something went wrong. Please try again."
+                detail="Oops! Something went wrong with the AI companion. Please try again."
             )
     finally:
         if uploaded_gemini_file:
@@ -81,7 +82,6 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
 
 @smart_notes_router.post("/limit-status", status_code=status.HTTP_200_OK)
 async def get_smart_notes_limit_status(payload: dict):
-    """Get the current rate limit status for smart notes."""
     uid = payload.get("uid")
     if not uid:
         raise HTTPException(status_code=400, detail="Missing user UID")
@@ -120,26 +120,21 @@ async def summarize_document(
             detail="Supported extensions for files are (.pdf, .txt) and images are (.png, .jpg, .jpeg, .jfif)."
         )
 
-    # 1. ENFORCE APP RATE LIMITER FIRST
-    try:
-        slots_remaining = enforce_feature_limit(uid, "smart_notes", max_limit=2)
-    except HTTPException as e:
-        if e.status_code == 429:
-            # Get the reset time from the status check
-            limit_status = check_rate_limit_status(uid, "smart_notes", max_limit=2)
-            reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Smart Notes limit reached. You can try again{reset_msg}."
-            )
-        raise e
+    # 1. ONLY VERIFY CURRENT LIMIT STATUS BEFORE COMPILING
+    limit_status = check_rate_limit_status(uid, "smart_notes", max_limit=2)
+    if not limit_status["available"] or limit_status["remaining"] <= 0:
+        reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Smart Notes limit reached. You can try again{reset_msg}."
+        )
 
     try:
         file_bytes = await file.read()
-        
         clean_instruction = instruction.strip().lower()
         content_fingerprint = hashlib.md5(f"{file_bytes[:500000]}_{clean_instruction}".encode('utf-8')).hexdigest()
         
+        # Check cache storage layer
         cache_query = db.collection("smart_notes_cache").document(content_fingerprint).get()
         
         if cache_query.exists:
@@ -161,9 +156,10 @@ async def summarize_document(
                 "is_cached": True,
                 "title": file.filename,
                 "summary": cached_data["summary"],
-                "slots_remaining": slots_remaining
+                "slots_remaining": limit_status["remaining"] # No deduction for cache matches
             }
 
+        # 2. FILE PROCESSING PHASE
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
             tmp_file.write(file_bytes)
             tmp_file_path = tmp_file.name
@@ -177,6 +173,10 @@ async def summarize_document(
         finally:
             if os.path.exists(tmp_file_path):
                 os.remove(tmp_file_path)
+
+        # 3. CRITICAL: DEDUCT THE SLOT *ONLY* AFTER AI SUCCESSFULLY RESPONDED
+        # Swapping enforce_feature_limit to safely record usage now
+        slots_remaining = enforce_feature_limit(uid, "smart_notes", max_limit=2)
 
         note_data = {
             "user_uid": uid,

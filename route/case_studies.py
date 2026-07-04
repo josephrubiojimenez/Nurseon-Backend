@@ -318,9 +318,12 @@ async def evaluate_response(payload: EvaluationPayload):
                 "source": "cache"
             }
             db.collection("case_evaluations").document().set(evaluation_record)
-            
-            score = cached_eval["evaluation_details"].get("score_percentage")
-            update_user_progress(payload.uid, payload.difficulty, score)
+
+            # FIX: Do not award progress points here. This bypassed the
+            # 75% pass threshold and double-awarded on top of the
+            # dedicated /api/progress/update-case-study endpoint that the
+            # frontend already calls with the correct gate. Points are
+            # now awarded exclusively by that endpoint.
 
             return {
                 "status": "success",
@@ -345,8 +348,11 @@ async def evaluate_response(payload: EvaluationPayload):
             "cached_at": datetime.now(timezone.utc)
         })
 
-        score = evaluation_data.get("score_percentage")
-        update_user_progress(payload.uid, payload.difficulty, score)
+        # FIX: Do not award progress points here either, for the same
+        # reason as the cache branch above. Points are now awarded
+        # exclusively by POST /api/progress/update-case-study, which the
+        # frontend already calls right after this response comes back
+        # and which correctly checks score >= 75 before awarding.
 
         return {
             "status": "success",
