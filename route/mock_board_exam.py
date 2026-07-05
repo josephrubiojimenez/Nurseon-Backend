@@ -113,7 +113,7 @@ def generate_all_100_questions() -> list:
     except Exception as e:
         error_msg = str(e)
         logger.exception("Unified AI Exam Generation Failure")
-        
+
         if "429" in error_msg or "quota" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -154,7 +154,7 @@ def get_phase_name(phase: int) -> str:
 def create_exam_session(uid: str, questions: list, exam_id: str) -> str:
     """Create a new exam session in Firestore."""
     now = datetime.now(timezone.utc)
-    
+
     session_data = {
         "uid": uid,
         "feature": "mock_board_exam",
@@ -191,7 +191,7 @@ def create_exam_session(uid: str, questions: list, exam_id: str) -> str:
         "updated_at": now,
         "completed_at": None
     }
-    
+
     # Store secure answer keys separately for grading
     secure_keys = {}
     for q in questions:
@@ -200,11 +200,11 @@ def create_exam_session(uid: str, questions: list, exam_id: str) -> str:
             "rationale": q.get("rationale")
         }
     session_data["secure_answer_keys"] = secure_keys
-    
+
     # Store the session
     session_ref = db.collection("exam_sessions").document(exam_id)
     session_ref.set(session_data)
-    
+
     return exam_id
 
 
@@ -237,24 +237,24 @@ def calculate_score(exam_data: Dict) -> Dict:
     """Calculate the score from exam answers."""
     answers = exam_data.get("answers", {})
     secure_keys = exam_data.get("secure_answer_keys", {})
-    
+
     correct = 0
     total = 100
-    phase_scores = {"easy": {"correct": 0, "total": 30, "wrong": 0}, 
-                    "medium": {"correct": 0, "total": 30, "wrong": 0}, 
+    phase_scores = {"easy": {"correct": 0, "total": 30, "wrong": 0},
+                    "medium": {"correct": 0, "total": 30, "wrong": 0},
                     "hard": {"correct": 0, "total": 40, "wrong": 0}}
-    
+
     # Flatten all answers
     all_answers = []
     for phase in ["easy", "medium", "hard"]:
         all_answers.extend(answers.get(phase, []))
-    
+
     for i, answer in enumerate(all_answers):
         q_id = str(i + 1)
         if q_id in secure_keys:
             correct_answer = secure_keys[q_id].get("correct")
             is_correct = answer == correct_answer if answer else False
-            
+
             if is_correct:
                 correct += 1
             else:
@@ -266,7 +266,7 @@ def calculate_score(exam_data: Dict) -> Dict:
                 else:
                     phase = "hard"
                 phase_scores[phase]["wrong"] += 1
-            
+
             # Track phase scores
             if i < 30:
                 phase = "easy"
@@ -274,12 +274,12 @@ def calculate_score(exam_data: Dict) -> Dict:
                 phase = "medium"
             else:
                 phase = "hard"
-            
+
             if is_correct:
                 phase_scores[phase]["correct"] += 1
-    
+
     percentage = round((correct / total) * 100)
-    
+
     return {
         "correct": correct,
         "total": total,
@@ -293,7 +293,7 @@ def process_weak_areas(exam_data: Dict) -> Dict:
     try:
         secure_keys = exam_data.get("secure_answer_keys", {})
         answers = exam_data.get("answers", {})
-        
+
         # Flatten answers with their phase
         all_answers = []
         for phase in ["easy", "medium", "hard"]:
@@ -311,7 +311,7 @@ def process_weak_areas(exam_data: Dict) -> Dict:
                     "answer": answer,
                     "phase": phase
                 })
-        
+
         weak_subjects = {}
         for item in all_answers:
             q_id = str(item["index"] + 1)
@@ -321,18 +321,18 @@ def process_weak_areas(exam_data: Dict) -> Dict:
                     # Extract subject from question/rationale
                     rationale = secure_keys[q_id].get("rationale", "")
                     # Simple subject extraction
-                    subjects = ["Pharmacology", "Medical-Surgical", "Maternal & Child", 
+                    subjects = ["Pharmacology", "Medical-Surgical", "Maternal & Child",
                                "Community Health", "Psychiatric", "Nursing Care"]
                     found_subject = "General Knowledge"
                     for subject in subjects:
                         if subject.lower() in rationale.lower():
                             found_subject = subject
                             break
-                    
+
                     if found_subject not in weak_subjects:
                         weak_subjects[found_subject] = 0
                     weak_subjects[found_subject] += 1
-        
+
         # Create weakness list with priority
         weakness_list = []
         total_wrong = sum(weak_subjects.values()) or 1
@@ -344,21 +344,21 @@ def process_weak_areas(exam_data: Dict) -> Dict:
                 priority = "medium"
             else:
                 priority = "low"
-            
+
             weakness_list.append({
                 "subject": subject,
                 "percent": percent,
                 "priority": priority,
                 "count": count
             })
-        
+
         # Sort by priority
         priority_order = {"critical": 0, "medium": 1, "low": 2}
         weakness_list.sort(key=lambda x: priority_order.get(x["priority"], 3))
-        
+
         # Generate recommendation
         recommendation = generate_recommendation(weakness_list)
-        
+
         return {
             "weak_areas": weakness_list[:5],  # Top 5
             "recommendation": recommendation
@@ -375,9 +375,9 @@ def generate_recommendation(weaknesses: List[Dict]) -> str:
     """Generate a personalized recommendation based on weak areas."""
     if not weaknesses:
         return "Excellent performance! Continue reviewing all topics to maintain your knowledge."
-    
+
     priority = weaknesses[0]
-    
+
     if priority["priority"] == "critical":
         return f"Focus on {priority['subject']} ({priority['percent']}% of your mistakes). Review clinical concepts and Smart Notes in this area before your next exam."
     elif len(weaknesses) >= 2:
@@ -392,7 +392,7 @@ def get_existing_session(uid: str) -> Optional[Dict]:
     try:
         sessions_ref = db.collection("exam_sessions")
         query = sessions_ref.where("uid", "==", uid).where("status", "in", ["in_progress", "break"]).limit(1).stream()
-        
+
         for doc in query:
             return {"id": doc.id, **doc.to_dict()}
         return None
@@ -406,7 +406,7 @@ def get_completed_session(uid: str) -> Optional[Dict]:
     try:
         sessions_ref = db.collection("exam_sessions")
         query = sessions_ref.where("uid", "==", uid).where("status", "==", "completed").limit(1).stream()
-        
+
         for doc in query:
             data = doc.to_dict()
             completed_at = data.get("completed_at")
@@ -429,7 +429,7 @@ async def get_exam_status(uid: str):
     try:
         # Check for existing active session
         existing = get_existing_session(uid)
-        
+
         if existing:
             # Check if phase timer expired
             phase_end_time = existing.get("phase_end_time")
@@ -442,7 +442,7 @@ async def get_exam_status(uid: str):
                     existing = get_existing_session(uid)
                     if not existing:
                         return {"status": "success", "exam_status": "available"}
-            
+
             return {
                 "status": "success",
                 "exam_id": existing["id"],
@@ -457,7 +457,7 @@ async def get_exam_status(uid: str):
                 "weak_areas": existing.get("weak_areas", []),
                 "recommendation": existing.get("recommendation", "")
             }
-        
+
         # Check for completed session (locked state)
         completed = get_completed_session(uid)
         if completed:
@@ -475,7 +475,7 @@ async def get_exam_status(uid: str):
                 "weak_areas": completed.get("weak_areas", []),
                 "recommendation": completed.get("recommendation", "")
             }
-        
+
         # Check if limit is reached
         limit_status = check_rate_limit_status(uid, "mock_board_exam", max_limit=1)
         if not limit_status["available"]:
@@ -485,13 +485,13 @@ async def get_exam_status(uid: str):
                 "reset_at": limit_status["reset_at"],
                 "slots_remaining": limit_status["remaining"]
             }
-        
+
         return {
             "status": "success",
             "exam_status": "available",
             "slots_remaining": limit_status["remaining"]
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting exam status: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to get exam status")
@@ -503,14 +503,14 @@ async def auto_advance_phase(uid: str, exam_id: str):
         exam_data = get_exam_session(exam_id)
         if not exam_data:
             return
-        
+
         current_phase = exam_data.get("current_phase", 1)
         phase_name = get_phase_name(current_phase)
-        
+
         # Mark current phase as completed
         phase_status = exam_data.get("phase_status", {})
         phase_status[phase_name] = "completed"
-        
+
         # Check if this is the last phase
         if current_phase >= 3:
             # Exam is complete
@@ -519,14 +519,14 @@ async def auto_advance_phase(uid: str, exam_id: str):
                 "status": "completed",
                 "completed_at": datetime.now(timezone.utc)
             })
-            
+
             # Calculate score
             updated_exam = get_exam_session(exam_id)
             score_data = calculate_score(updated_exam)
-            
+
             # Update score
             update_exam_session(exam_id, {"score": score_data})
-            
+
             # Process weak areas
             weak_analysis = process_weak_areas(updated_exam)
             update_exam_session(exam_id, {
@@ -534,11 +534,11 @@ async def auto_advance_phase(uid: str, exam_id: str):
                 "recommendation": weak_analysis["recommendation"]
             })
             return
-        
+
         # Start break
         break_duration = BREAK_DURATIONS.get(current_phase, 600)
         break_end_time = datetime.now(timezone.utc) + timedelta(seconds=break_duration)
-        
+
         update_exam_session(exam_id, {
             "phase_status": phase_status,
             "status": "break",
@@ -556,7 +556,7 @@ async def auto_advance_phase(uid: str, exam_id: str):
 async def start_mock_exam(request: Request, payload: StartExamRequest):
     """Start a new mock exam session."""
     uid = payload.uid
-    
+
     # Check if user already has an active session
     existing = get_existing_session(uid)
     if existing:
@@ -569,28 +569,36 @@ async def start_mock_exam(request: Request, payload: StartExamRequest):
             "current_phase": existing.get("current_phase", 1),
             "current_question_index": existing.get("current_question_index", 0)
         }
-    
-    # Enforce limit (1 attempt per 24-hour window)
-    try:
-        slots_remaining = enforce_feature_limit(uid, "mock_board_exam", max_limit=1)
-    except HTTPException as e:
-        if e.status_code == 429:
-            limit_status = check_rate_limit_status(uid, "mock_board_exam", max_limit=1)
-            reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Mock Board Exam limit reached. You can try again{reset_msg}."
-            )
-        raise e
-    
+
+    # ------------------------------------------------------------------
+    # FIX: Check availability WITHOUT consuming the slot yet.
+    # Previously enforce_feature_limit() (which consumes the slot) ran
+    # BEFORE generate_all_100_questions(). Since that call generates 100
+    # schema-strict questions in a single request, it fails often enough
+    # (truncated output, schema mismatch, transient Gemini errors) that
+    # users were losing their one daily attempt on requests that never
+    # actually produced an exam. The slot is now only spent after the
+    # exam has actually been generated and the session created.
+    # ------------------------------------------------------------------
+    limit_status = check_rate_limit_status(uid, "mock_board_exam", max_limit=1)
+    if not limit_status["available"]:
+        reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Mock Board Exam limit reached. You can try again{reset_msg}."
+        )
+
     # Generate questions
     try:
         questions = generate_all_100_questions()
         exam_id = f"exam_{uid}_{int(datetime.now(timezone.utc).timestamp())}"
-        
+
         # Create session
         create_exam_session(uid, questions, exam_id)
-        
+
+        # Only consume the slot now that the exam actually started successfully.
+        slots_remaining = enforce_feature_limit(uid, "mock_board_exam", max_limit=1)
+
         # Prepare client-side questions (without correct answers)
         client_questions = []
         for q in questions:
@@ -599,7 +607,7 @@ async def start_mock_exam(request: Request, payload: StartExamRequest):
                 "question": q.get("question"),
                 "options": q.get("options")
             })
-        
+
         return {
             "status": "success",
             "exam_id": exam_id,
@@ -607,6 +615,12 @@ async def start_mock_exam(request: Request, payload: StartExamRequest):
             "limit_remaining": slots_remaining,
             "exam_status": "in_progress"
         }
+    except HTTPException:
+        # Preserve specific errors raised by generate_all_100_questions
+        # (429/500/504) instead of masking them as a generic failure.
+        # The slot was never consumed since enforce_feature_limit() has
+        # not been reached yet in this path.
+        raise
     except Exception as e:
         logger.error(f"Error starting exam: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to start exam")
@@ -619,39 +633,39 @@ async def submit_answer(payload: SubmitAnswerRequest):
     exam_id = payload.exam_id
     question_index = payload.question_index
     answer = payload.answer
-    
+
     if not all([uid, exam_id, question_index is not None, answer]):
         raise HTTPException(status_code=400, detail="Missing required fields")
-    
+
     # Get exam session
     exam_data = get_exam_session(exam_id)
     if not exam_data:
         raise HTTPException(status_code=404, detail="Exam session not found")
-    
+
     if exam_data.get("uid") != uid:
         raise HTTPException(status_code=403, detail="Unauthorized access to exam")
-    
+
     # Determine phase
     phase = get_phase_for_question_index(question_index)
     phase_name = get_phase_name(phase)
-    
+
     # Update answers
     answers = exam_data.get("answers", {})
     phase_answers = answers.get(phase_name, [])
-    
+
     # Ensure the phase answers list is long enough
     phase_start_index = (phase - 1) * 30
     local_index = question_index - phase_start_index
-    
+
     while len(phase_answers) <= local_index:
         phase_answers.append(None)
-    
+
     phase_answers[local_index] = answer
     answers[phase_name] = phase_answers
-    
+
     # Update session
     update_exam_session(exam_id, {"answers": answers, "status": "in_progress"})
-    
+
     return {
         "status": "success",
         "message": "Answer saved",
@@ -664,25 +678,25 @@ async def advance_phase(payload: AdvancePhaseRequest):
     """Advance to the next phase or start a break."""
     uid = payload.uid
     exam_id = payload.exam_id
-    
+
     if not all([uid, exam_id]):
         raise HTTPException(status_code=400, detail="Missing required fields")
-    
+
     # Get exam session
     exam_data = get_exam_session(exam_id)
     if not exam_data:
         raise HTTPException(status_code=404, detail="Exam session not found")
-    
+
     if exam_data.get("uid") != uid:
         raise HTTPException(status_code=403, detail="Unauthorized access to exam")
-    
+
     current_phase = exam_data.get("current_phase", 1)
     phase_name = get_phase_name(current_phase)
-    
+
     # Mark current phase as completed
     phase_status = exam_data.get("phase_status", {})
     phase_status[phase_name] = "completed"
-    
+
     # Check if this is the last phase
     if current_phase >= 3:
         # Exam is complete
@@ -691,39 +705,39 @@ async def advance_phase(payload: AdvancePhaseRequest):
             "status": "completed",
             "completed_at": datetime.now(timezone.utc)
         })
-        
+
         # Calculate score
         updated_exam = get_exam_session(exam_id)
         score_data = calculate_score(updated_exam)
-        
+
         # Update score
         update_exam_session(exam_id, {"score": score_data})
-        
+
         # Process weak areas
         weak_analysis = process_weak_areas(updated_exam)
         update_exam_session(exam_id, {
             "weak_areas": weak_analysis["weak_areas"],
             "recommendation": weak_analysis["recommendation"]
         })
-        
+
         # Update user_progress with weaknesses
         try:
             from services.progressService import updateMockExamProgress
             await updateMockExamProgress(uid, score_data["percentage"])
         except Exception as e:
             logger.error(f"Failed to update progress: {str(e)}")
-        
+
         return {
             "status": "success",
             "message": "Exam completed!",
             "exam_status": "completed",
             "score": score_data
         }
-    
+
     # Start break
     break_duration = BREAK_DURATIONS.get(current_phase, 600)
     break_end_time = datetime.now(timezone.utc) + timedelta(seconds=break_duration)
-    
+
     update_exam_session(exam_id, {
         "phase_status": phase_status,
         "status": "break",
@@ -732,10 +746,10 @@ async def advance_phase(payload: AdvancePhaseRequest):
             "break_end_time": break_end_time
         }
     })
-    
+
     # Return break info
     phase_display = {1: "Easy", 2: "Medium", 3: "Hard"}
-    
+
     return {
         "status": "success",
         "message": f"Phase {phase_display.get(current_phase, '')} completed. Break started.",
@@ -751,22 +765,22 @@ async def resume_exam(payload: AdvancePhaseRequest):
     """Resume from break to the next phase."""
     uid = payload.uid
     exam_id = payload.exam_id
-    
+
     if not all([uid, exam_id]):
         raise HTTPException(status_code=400, detail="Missing required fields")
-    
+
     # Get exam session
     exam_data = get_exam_session(exam_id)
     if not exam_data:
         raise HTTPException(status_code=404, detail="Exam session not found")
-    
+
     if exam_data.get("uid") != uid:
         raise HTTPException(status_code=403, detail="Unauthorized access to exam")
-    
+
     # Check if break is over
     break_data = exam_data.get("break", {})
     break_end_time = break_data.get("break_end_time")
-    
+
     if break_end_time:
         break_end_time = break_end_time if break_end_time.tzinfo else break_end_time.replace(tzinfo=timezone.utc)
         if datetime.now(timezone.utc) < break_end_time:
@@ -775,18 +789,18 @@ async def resume_exam(payload: AdvancePhaseRequest):
                 "message": "Break not finished yet",
                 "break_end_time": break_end_time.isoformat()
             }
-    
+
     # Advance to next phase
     current_phase = exam_data.get("current_phase", 1)
     next_phase = current_phase + 1
-    
+
     phase_name = get_phase_name(next_phase)
     phase_status = exam_data.get("phase_status", {})
     phase_status[phase_name] = "in_progress"
-    
+
     now = datetime.now(timezone.utc)
     phase_duration = PHASE_CONFIG.get(next_phase, {}).get("duration", 5400)
-    
+
     update_exam_session(exam_id, {
         "current_phase": next_phase,
         "phase_status": phase_status,
@@ -798,7 +812,7 @@ async def resume_exam(payload: AdvancePhaseRequest):
             "break_end_time": None
         }
     })
-    
+
     return {
         "status": "success",
         "message": f"Resumed to Phase {next_phase}",
@@ -813,25 +827,25 @@ async def submit_mock_exam(payload: SubmitExamRequest):
     uid = payload.uid
     exam_id = payload.exam_id
     answers = payload.answers
-    
+
     # Get exam session
     exam_data = get_exam_session(exam_id)
     if not exam_data:
         raise HTTPException(status_code=404, detail="Exam session not found")
-    
+
     if exam_data.get("uid") != uid:
         raise HTTPException(status_code=403, detail="Unauthorized access to exam")
-    
+
     # Process answers - convert from flat object to phase-based structure
     secure_keys = exam_data.get("secure_answer_keys", {})
-    
+
     # Build answers by phase
     phase_answers = {
         "easy": [],
         "medium": [],
         "hard": []
     }
-    
+
     for i in range(1, 101):
         q_id = str(i)
         user_ans = answers.get(q_id, "")
@@ -841,32 +855,32 @@ async def submit_mock_exam(payload: SubmitExamRequest):
             phase_answers["medium"].append(user_ans)
         else:
             phase_answers["hard"].append(user_ans)
-    
+
     # Calculate score
     score = 0
     total_items = 100
     breakdown = {}
-    
+
     for i in range(1, 101):
         q_id = str(i)
         if q_id in secure_keys:
             correct_ans = secure_keys[q_id].get("correct")
             user_ans = answers.get(q_id, "")
             is_correct = user_ans == correct_ans if user_ans else False
-            
+
             if is_correct:
                 score += 1
-            
+
             breakdown[q_id] = {
                 "user_answer": user_ans if user_ans else "Unanswered",
                 "correct_answer": correct_ans,
                 "rationale": secure_keys[q_id].get("rationale"),
                 "is_correct": is_correct
             }
-    
+
     submission_time = datetime.now(timezone.utc)
     score_percentage = round((score / total_items) * 100)
-    
+
     # Update exam session
     update_exam_session(exam_id, {
         "status": "completed",
@@ -883,16 +897,16 @@ async def submit_mock_exam(payload: SubmitExamRequest):
             "percentage": score_percentage
         }
     })
-    
+
     # Process weak areas
     updated_exam = get_exam_session(exam_id)
     weak_analysis = process_weak_areas(updated_exam)
-    
+
     update_exam_session(exam_id, {
         "weak_areas": weak_analysis["weak_areas"],
         "recommendation": weak_analysis["recommendation"]
     })
-    
+
     # Update progress in user_progress
     try:
         progress_ref = db.collection("user_progress").document(uid)
@@ -905,7 +919,7 @@ async def submit_mock_exam(payload: SubmitExamRequest):
         }, merge=True)
     except Exception as e:
         logger.error(f"Failed to update progress: {str(e)}")
-    
+
     return {
         "status": "success",
         "exam_id": exam_id,
@@ -925,7 +939,7 @@ async def get_mock_exam_limit_status(payload: dict):
     uid = payload.get("uid")
     if not uid:
         raise HTTPException(status_code=400, detail="Missing user UID")
-    
+
     limit_status = check_rate_limit_status(uid, "mock_board_exam", max_limit=1)
     return {
         "status": "success",
@@ -942,13 +956,13 @@ async def get_exam_results(uid: str, exam_id: str):
     exam_data = get_exam_session(exam_id)
     if not exam_data:
         raise HTTPException(status_code=404, detail="Exam session not found")
-    
+
     if exam_data.get("uid") != uid:
         raise HTTPException(status_code=403, detail="Unauthorized access to exam")
-    
+
     if exam_data.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Exam not completed yet")
-    
+
     return {
         "status": "success",
         "exam_id": exam_id,
@@ -965,9 +979,9 @@ async def get_exam_questions(exam_id: str):
     exam_data = get_exam_session(exam_id)
     if not exam_data:
         raise HTTPException(status_code=404, detail="Exam session not found")
-    
+
     questions = exam_data.get("questions_data", [])
-    
+
     # Remove correct answers for client
     client_questions = []
     for q in questions:
@@ -976,7 +990,7 @@ async def get_exam_questions(exam_id: str):
             "question": q.get("question"),
             "options": q.get("options")
         })
-    
+
     return {
         "status": "success",
         "questions": client_questions,
