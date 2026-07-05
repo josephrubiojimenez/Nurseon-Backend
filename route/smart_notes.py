@@ -1,5 +1,6 @@
 import io
 import os
+import time
 import logging
 import hashlib
 import tempfile
@@ -34,9 +35,8 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         )
 
     try:
-        # Test the API key by making a simple call
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        # Try gemini-1.5-flash instead of gemini-2.5-flash as it might be more stable
+        # Using gemini-2.5-flash to align with your dashboard tier and limits
+        model = genai.GenerativeModel("gemini-2.5-flash")
     except Exception as model_err:
         logger.error(f"Failed to initialize Gemini model: {model_err}")
         raise HTTPException(
@@ -63,7 +63,6 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         uploaded_gemini_file = genai.upload_file(path=file_path, mime_type=mime_type)
         
         # Wait for file to be processed
-        import time
         time.sleep(1)
         
         logger.info("Generating content with Gemini...")
@@ -83,36 +82,44 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
             detail="The content was blocked by the AI service. Please try a different document."
         )
     except Exception as ai_err:
-        error_msg = str(ai_err)
-        logger.error(f"Gemini API Error: {error_msg}", exc_info=True)
+        error_msg = str(ai_err).lower()
+        logger.error(f"Gemini API Error: {str(ai_err)}", exc_info=True)
         
-        # Check for specific error types
-        if "429" in error_msg or "quota" in error_msg.lower() or "rate_limit" in error_msg.lower():
+        # Targeted checks to prevent incorrect error masks
+        if "429" in error_msg or "quota" in error_msg or "rate_limit" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many requests right now. Please wait a minute and try again."
             )
-        elif "api_key" in error_msg.lower() or "invalid" in error_msg.lower() or "permission" in error_msg.lower():
-            logger.error(f"API Key issue detected: {error_msg}")
+        elif "api_key" in error_msg or "unauthenticated" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="AI Service authentication failed. Please contact support."
             )
-        elif "timeout" in error_msg.lower() or "deadline" in error_msg.lower():
+        elif "model" in error_msg or "not found" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The requested AI model version is currently unavailable or invalid."
+            )
+        elif "permission" in error_msg or "forbidden" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your API credentials lack permissions for this model context tier."
+            )
+        elif "timeout" in error_msg or "deadline" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail="The AI is currently busy. Please try again in a moment."
             )
-        elif "file" in error_msg.lower() and "not found" in error_msg.lower():
+        elif "file" in error_msg and "not found" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="File upload failed. Please try uploading the file again."
             )
         else:
-            # Return more specific error message for debugging
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"AI Service error: {error_msg[:100]}"
+                detail=f"AI Service error: {str(ai_err)[:100]}"
             )
     finally:
         if uploaded_gemini_file:
@@ -145,7 +152,6 @@ async def summarize_document(
     file: UploadFile = File(...),
     instruction: str = Form("")
 ):
-    # Validate file
     if not file:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -153,10 +159,8 @@ async def summarize_document(
         )
     
     filename_lower = file.filename.lower()
-    file_size = 0
     
     try:
-        # Check file size before processing
         file_bytes = await file.read()
         file_size = len(file_bytes)
         
@@ -195,7 +199,6 @@ async def summarize_document(
             detail=f"Unsupported file format: {file_ext}. Supported formats are: {', '.join(mime_mapping.keys())}"
         )
 
-    # 1. Check current limit status
     limit_status = check_rate_limit_status(uid, "smart_notes", max_limit=2)
     if not limit_status["available"] or limit_status["remaining"] <= 0:
         reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
@@ -208,7 +211,6 @@ async def summarize_document(
         clean_instruction = instruction.strip().lower()
         content_fingerprint = hashlib.md5(f"{file_bytes[:500000]}_{clean_instruction}".encode('utf-8')).hexdigest()
         
-        # Check cache
         cache_query = db.collection("smart_notes_cache").document(content_fingerprint).get()
         
         if cache_query.exists:
@@ -233,21 +235,18 @@ async def summarize_document(
                 "slots_remaining": limit_status["remaining"]
             }
 
-        # 2. Save file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
             tmp_file.write(file_bytes)
             tmp_file_path = tmp_file.name
             logger.info(f"Temporary file created: {tmp_file_path}")
 
         try:
-            # 3. Process with Gemini
             ai_smart_notes = run_gemini_ai_summary_native(
                 file_path=tmp_file_path,
                 mime_type=mime_mapping[file_ext],
                 custom_instruction=instruction
             )
             
-            # Validate response
             if not ai_smart_notes or len(ai_smart_notes.strip()) < 10:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -255,15 +254,12 @@ async def summarize_document(
                 )
                 
         finally:
-            # Clean up temp file
             if os.path.exists(tmp_file_path):
                 os.remove(tmp_file_path)
                 logger.info(f"Temporary file deleted: {tmp_file_path}")
 
-        # 4. Deduct the slot only after successful AI response
         slots_remaining = enforce_feature_limit(uid, "smart_notes", max_limit=2)
 
-        # 5. Save to database
         note_data = {
             "user_uid": uid,
             "title": file.filename,
@@ -276,7 +272,6 @@ async def summarize_document(
         doc_ref = db.collection("smart_notes").document()
         doc_ref.set(note_data)
         
-        # 6. Cache the response
         db.collection("smart_notes_cache").document(content_fingerprint).set({
             "summary": ai_smart_notes,
             "cached_at": datetime.now(timezone.utc)
