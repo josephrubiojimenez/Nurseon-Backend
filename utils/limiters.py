@@ -11,28 +11,6 @@ _fallback_enabled = False
 
 
 def enforce_feature_limit(uid: str, feature_name: str, max_limit: int) -> int:
-    """
-    Enforce a fixed 24-hour quota for a user and feature.
-
-    Each user has their own personal 24-hour window.
-
-    Example:
-
-    Limit = 5
-
-    Day 1
-        8:00 AM -> Use #1
-        ...
-        8:20 AM -> Use #5
-
-    User is blocked.
-
-    Day 2
-        8:00 AM
-
-    Quota resets to 5/5.
-    """
-
     global _consecutive_failures
     global _fallback_enabled
 
@@ -100,17 +78,7 @@ def check_rate_limit_status(
     feature_name: str,
     max_limit: int,
 ) -> dict:
-    """
-    Returns:
-
-    {
-        available,
-        remaining,
-        reset_at,
-        used
-    }
-    """
-
+    
     try:
 
         from utils.limiters_simple import (

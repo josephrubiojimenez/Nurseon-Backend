@@ -35,7 +35,6 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         )
 
     try:
-        # Adjusted to match your active dashboard tier 
         model = genai.GenerativeModel("gemini-2.5-flash")
     except Exception as model_err:
         logger.error(f"Failed to initialize Gemini model: {model_err}")
@@ -58,11 +57,9 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
 
     uploaded_gemini_file = None
     try:
-        # Upload file to Gemini
         logger.info(f"Uploading file to Gemini: {file_path} with mime_type: {mime_type}")
         uploaded_gemini_file = genai.upload_file(path=file_path, mime_type=mime_type)
         
-        # Wait for file to be processed
         time.sleep(1)
         
         logger.info("Generating content with Gemini...")
@@ -85,31 +82,29 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         error_msg = str(ai_err).lower()
         logger.error(f"Gemini API Error: {str(ai_err)}", exc_info=True)
         
-        # Extract explicit HTTP status attributes if the SDK exception objects expose them
         status_code_attr = getattr(ai_err, "code", None) or getattr(ai_err, "status_code", None)
         
-        # Explicit Quota / Rate Limits check (Fixes error mask during 5/5 RPM ceiling spikes)
+        # Explicit Quota / Rate Limits check (Fixes error masking during 5/5 RPM peaks)
         if status_code_attr == 429 or "429" in error_msg or "quota" in error_msg or "rate_limit" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="The AI rate limit or minute quota has been exceeded. Please wait a minute and try again."
+                detail="The upstream AI rate limit or minute quota has been reached. Please wait a moment and try again."
             )
             
-        # Permission Restrictions / Plan Context Errors
+        # Plan Context Errors / Forbidden
         elif status_code_attr == 403 or "permission" in error_msg or "forbidden" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Your account has exceeded its allocated tier permissions. Try again in a moment."
+                detail="Your AI account has encountered resource restrictions. Try again in a moment."
             )
             
-        # Explicit Broken Authentication Credentials
+        # True Authentication / Invalid Key Failures
         elif status_code_attr == 401 or "api_key" in error_msg or "invalid key" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="AI Service authentication failed. Please contact support."
+                detail="AI Service credentials verification failed. Please check backend config variables."
             )
             
-        # Model Configuration Mismatches
         elif "model" in error_msg or "not found" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -118,12 +113,7 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         elif "timeout" in error_msg or "deadline" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="The AI is currently busy. Please try again in a moment."
-            )
-        elif "file" in error_msg and "not found" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File upload failed. Please try uploading the file again."
+                detail="The AI server timed out. Please try again in a moment."
             )
         else:
             raise HTTPException(
@@ -179,7 +169,7 @@ async def summarize_document(
                 detail="Uploaded file is empty. Please upload a valid file."
             )
         
-        if file_size > 20 * 1024 * 1024:  # 20MB limit
+        if file_size > 20 * 1024 * 1024:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="File size exceeds 20MB limit. Please upload a smaller file."
@@ -259,7 +249,7 @@ async def summarize_document(
             if not ai_smart_notes or len(ai_smart_notes.strip()) < 10:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="The AI returned an empty or incomplete response. Please try again."
+                    detail="The AI returned an empty response. Please try again."
                 )
                 
         finally:
