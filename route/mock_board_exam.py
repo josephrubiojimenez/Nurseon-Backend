@@ -453,6 +453,7 @@ async def get_exam_status(uid: str):
                 "break_active": existing.get("break", {}).get("active", False),
                 "break_end_time": existing.get("break", {}).get("break_end_time"),
                 "window_start": existing.get("window_start"),
+                "phase_start_time": existing.get("phase_start_time"),
                 "score": existing.get("score", {"correct": 0, "total": 100, "percentage": 0}),
                 "weak_areas": existing.get("weak_areas", []),
                 "recommendation": existing.get("recommendation", "")
@@ -471,6 +472,7 @@ async def get_exam_status(uid: str):
                 "break_active": False,
                 "break_end_time": None,
                 "window_start": completed.get("window_start"),
+                "phase_start_time": completed.get("phase_start_time"),
                 "score": completed.get("score", {"correct": 0, "total": 100, "percentage": 0}),
                 "weak_areas": completed.get("weak_areas", []),
                 "recommendation": completed.get("recommendation", "")
@@ -570,16 +572,6 @@ async def start_mock_exam(request: Request, payload: StartExamRequest):
             "current_question_index": existing.get("current_question_index", 0)
         }
 
-    # ------------------------------------------------------------------
-    # FIX: Check availability WITHOUT consuming the slot yet.
-    # Previously enforce_feature_limit() (which consumes the slot) ran
-    # BEFORE generate_all_100_questions(). Since that call generates 100
-    # schema-strict questions in a single request, it fails often enough
-    # (truncated output, schema mismatch, transient Gemini errors) that
-    # users were losing their one daily attempt on requests that never
-    # actually produced an exam. The slot is now only spent after the
-    # exam has actually been generated and the session created.
-    # ------------------------------------------------------------------
     limit_status = check_rate_limit_status(uid, "mock_board_exam", max_limit=1)
     if not limit_status["available"]:
         reset_msg = f" at {limit_status['reset_at']}" if limit_status.get("reset_at") else " tomorrow"
@@ -616,10 +608,6 @@ async def start_mock_exam(request: Request, payload: StartExamRequest):
             "exam_status": "in_progress"
         }
     except HTTPException:
-        # Preserve specific errors raised by generate_all_100_questions
-        # (429/500/504) instead of masking them as a generic failure.
-        # The slot was never consumed since enforce_feature_limit() has
-        # not been reached yet in this path.
         raise
     except Exception as e:
         logger.error(f"Error starting exam: {str(e)}")
@@ -909,6 +897,7 @@ async def submit_mock_exam(payload: SubmitExamRequest):
 
     # Update progress in user_progress
     try:
+        from google.cloud import firestore
         progress_ref = db.collection("user_progress").document(uid)
         progress_ref.set({
             "mock_exams_taken": firestore.Increment(1),
