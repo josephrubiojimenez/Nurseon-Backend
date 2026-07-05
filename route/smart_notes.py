@@ -3,35 +3,30 @@ import os
 import time
 import logging
 import hashlib
-import tempfile
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, status
 import google.generativeai as genai
+from dotenv import load_dotenv
 
 from database.firebase import db
 from utils.limiters import enforce_feature_limit, check_rate_limit_status
+
+load_dotenv()
 
 logger = logging.getLogger("smart_notes")
 smart_notes_router = APIRouter()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        logger.info("Gemini API configured successfully")
-    except Exception as config_err:
-        logger.error(f"Failed to configure Gemini API: {config_err}")
-else:
-    logger.error("GEMINI_API_KEY environment variable is not set")
+    genai.configure(api_key=GEMINI_API_KEY)
 
 
-def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruction: str = "") -> str:
+def run_gemini_ai_summary_native(file_bytes: bytes, mime_type: str, custom_instruction: str = "") -> str:
     if not GEMINI_API_KEY:
-        logger.error("Gemini API key is missing")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AI Service is currently unconfigured. Please contact support."
+            detail="AI Service is currently unconfigured."
         )
 
     try:
@@ -40,7 +35,7 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         logger.error(f"Failed to initialize Gemini model: {model_err}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AI Service initialization failed. Please try again later."
+            detail="AI Service initialization failed."
         )
 
     system_prompt = (
@@ -55,60 +50,30 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         
     user_prompt = "Please process this attached document source file into comprehensive study material."
 
-    uploaded_gemini_file = None
     try:
-        logger.info(f"Uploading file to Gemini: {file_path} with mime_type: {mime_type}")
-        uploaded_gemini_file = genai.upload_file(path=file_path, mime_type=mime_type)
-        
-        time.sleep(1)
+        logger.info("Preparing file asset structure in-memory...")
+        # Direct structural byte layout matching Google's generation signature
+        file_part = {
+            "mime_type": mime_type,
+            "data": file_bytes
+        }
         
         logger.info("Generating content with Gemini...")
-        response = model.generate_content([system_prompt + user_prompt, uploaded_gemini_file])
+        response = model.generate_content([system_prompt + user_prompt, file_part])
         
         if not response.text:
-            logger.warning("Gemini returned empty response")
-            return "Failed to generate structured text. Please try uploading a different file or image."
+            return "Failed to generate structured text. Please try uploading a different section."
             
-        logger.info("Successfully generated smart notes")
         return response.text
         
-    except genai.types.generation_types.BlockedPromptException as blocked_err:
-        logger.error(f"Content blocked by Gemini: {blocked_err}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The content was blocked by the AI service. Please try a different document."
-        )
     except Exception as ai_err:
         error_msg = str(ai_err).lower()
         logger.error(f"Gemini API Error: {str(ai_err)}", exc_info=True)
         
-        status_code_attr = getattr(ai_err, "code", None) or getattr(ai_err, "status_code", None)
-        
-        # Explicit Quota / Rate Limits check (Fixes error masking during 5/5 RPM peaks)
-        if status_code_attr == 429 or "429" in error_msg or "quota" in error_msg or "rate_limit" in error_msg:
+        if "429" in error_msg or "quota" in error_msg or "rate_limit" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="The upstream AI rate limit or minute quota has been reached. Please wait a moment and try again."
-            )
-            
-        # Plan Context Errors / Forbidden
-        elif status_code_attr == 403 or "permission" in error_msg or "forbidden" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Your AI account has encountered resource restrictions. Try again in a moment."
-            )
-            
-        # True Authentication / Invalid Key Failures
-        elif status_code_attr == 401 or "api_key" in error_msg or "invalid key" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="AI Service credentials verification failed. Please check backend config variables."
-            )
-            
-        elif "model" in error_msg or "not found" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The requested AI model version is currently unavailable or invalid."
+                detail="The AI rate limit has been reached. Please wait a moment and try again."
             )
         elif "timeout" in error_msg or "deadline" in error_msg:
             raise HTTPException(
@@ -118,15 +83,8 @@ def run_gemini_ai_summary_native(file_path: str, mime_type: str, custom_instruct
         else:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"AI Service error: {str(ai_err)[:100]}"
+                detail="AI Service encountered an unexpected processing error."
             )
-    finally:
-        if uploaded_gemini_file:
-            try:
-                genai.delete_file(name=uploaded_gemini_file.name)
-                logger.info(f"Deleted temporary file: {uploaded_gemini_file.name}")
-            except Exception as clean_err:
-                logger.warning(f"Failed to delete file {uploaded_gemini_file.name}: {clean_err}")
 
 
 @smart_notes_router.post("/limit-status", status_code=status.HTTP_200_OK)
@@ -166,20 +124,23 @@ async def summarize_document(
         if file_size == 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Uploaded file is empty. Please upload a valid file."
+                detail="Uploaded file is empty."
             )
         
-        if file_size > 20 * 1024 * 1024:
+        # Guard rail down to 15MB for direct in-memory passing optimization
+        if file_size > 15 * 1024 * 1024:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File size exceeds 20MB limit. Please upload a smaller file."
+                detail="File size is too large for processing. Please upload a smaller portion or segment."
             )
             
+    except HTTPException as explicit_http:
+        raise explicit_http
     except Exception as read_err:
         logger.error(f"File read error: {read_err}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to read the uploaded file. Please try again."
+            detail="Failed to safely read the uploaded file data."
         )
     
     mime_mapping = {
@@ -195,7 +156,7 @@ async def summarize_document(
     if file_ext not in mime_mapping:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file format: {file_ext}. Supported formats are: {', '.join(mime_mapping.keys())}"
+            detail=f"Unsupported format. Use: {', '.join(mime_mapping.keys())}"
         )
 
     limit_status = check_rate_limit_status(uid, "smart_notes", max_limit=2)
@@ -214,7 +175,7 @@ async def summarize_document(
         
         if cache_query.exists:
             cached_data = cache_query.to_dict()
-            logger.info(f"Cache Hit for fingerprint: {content_fingerprint}")
+            logger.info("Smart Notes Cache Hit!")
             
             user_history_data = {
                 "user_uid": uid,
@@ -234,28 +195,12 @@ async def summarize_document(
                 "slots_remaining": limit_status["remaining"]
             }
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
-            tmp_file.write(file_bytes)
-            tmp_file_path = tmp_file.name
-            logger.info(f"Temporary file created: {tmp_file_path}")
-
-        try:
-            ai_smart_notes = run_gemini_ai_summary_native(
-                file_path=tmp_file_path,
-                mime_type=mime_mapping[file_ext],
-                custom_instruction=instruction
-            )
-            
-            if not ai_smart_notes or len(ai_smart_notes.strip()) < 10:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="The AI returned an empty response. Please try again."
-                )
-                
-        finally:
-            if os.path.exists(tmp_file_path):
-                os.remove(tmp_file_path)
-                logger.info(f"Temporary file deleted: {tmp_file_path}")
+        # Run direct in-memory layout engine
+        ai_smart_notes = run_gemini_ai_summary_native(
+            file_bytes=file_bytes,
+            mime_type=mime_mapping[file_ext],
+            custom_instruction=instruction
+        )
 
         slots_remaining = enforce_feature_limit(uid, "smart_notes", max_limit=2)
 
@@ -265,7 +210,7 @@ async def summarize_document(
             "summary": ai_smart_notes,
             "custom_instruction": instruction.strip() or None,
             "created_at": datetime.now(timezone.utc),
-            "source_type": "pdf_upload" if filename_lower.endswith('.pdf') else ("text_upload" if filename_lower.endswith('.txt') else "image_upload")
+            "source_type": "pdf_upload" if filename_lower.endswith('.pdf') else "image_upload"
         }
         
         doc_ref = db.collection("smart_notes").document()
@@ -276,8 +221,6 @@ async def summarize_document(
             "cached_at": datetime.now(timezone.utc)
         })
 
-        logger.info(f"Successfully processed file: {file.filename}")
-        
         return {
             "status": "success",
             "is_cached": False,
@@ -293,5 +236,5 @@ async def summarize_document(
         logger.error(f"Runtime Processing Failure: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process your request: {str(e)}"
+            detail="Failed to complete your document summary request."
         )
