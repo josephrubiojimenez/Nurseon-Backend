@@ -149,9 +149,7 @@ def analyze_user_weaknesses(uid: str, num_exams: int = 3) -> Dict:
 
 
 def generate_recommendation(weaknesses: List[Dict]) -> str:
-    """
-    Generate personalized study recommendation based on weaknesses.
-    """
+
     if not weaknesses:
         return "Excellent performance! Continue reviewing all topics to maintain and strengthen your knowledge."
     

@@ -44,7 +44,7 @@ def enforce_feature_limit(uid: str, feature_name: str, max_limit: int) -> int:
 
             if not _fallback_enabled:
                 logger.warning(
-                    "Switching to fallback rate limiter."
+                    "Switching rate limiter."
                 )
                 _fallback_enabled = True
 
@@ -63,11 +63,11 @@ def enforce_feature_limit(uid: str, feature_name: str, max_limit: int) -> int:
             except Exception:
 
                 logger.exception(
-                    "Fallback limiter also failed."
+                    "limiters failed."
                 )
 
         logger.warning(
-            "All limiters failed. Allowing request."
+            "limiters failed."
         )
 
         return max_limit

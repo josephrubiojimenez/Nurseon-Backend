@@ -1,18 +1,12 @@
 import os
 import sys
 from dotenv import load_dotenv
-
-# Load environment variables
 load_dotenv()
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-# --- SlowAPI Imports for Global Setup ---
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi import _rate_limit_exceeded_handler
-
 from database.firebase import db 
 from utils.firebase_health import log_firebase_status
 from route.smart_notes import smart_notes_router
@@ -21,27 +15,24 @@ from route.document import doc_router
 from route.quiz import quiz_router
 from route.case_studies import case_studies_router
 from route.progress import progress_router
-
-# Import the router alongside its internal instantiated limiter configuration instance
 from route.nurseon_ai_chat import nurseon_ai_chat_router, limiter
 from route.mock_board_exam import mock_board_exam_router
 from route.nursing_care_plans import nursing_care_plans_router
 
-# Ensure current directory is in system path
+
+
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
 
 app = FastAPI()
 
-# --- Firebase Health Check on Startup ---
 @app.on_event("startup")
 async def startup_event():
     log_firebase_status()
 
-# =================================================================
-# 1. CORS MIDDLEWARE (Must be evaluated first for preflight/OPTIONS)
-# =================================================================
+
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -55,7 +46,7 @@ origins = [
     os.environ.get("FRONTEND_URL", ""),
 ]
 
-# Clean origins array and remove trailing slashes
+
 origins = [origin.rstrip("/") for origin in origins if origin]
 
 app.add_middleware(
@@ -67,17 +58,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =================================================================
-# 2. RATE LIMITER MIDDLEWARE (Evaluated after CORS)
-# =================================================================
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-
-# =================================================================
-# ROUTER REGISTRATIONS
-# =================================================================
 
 # Authentication
 app.include_router(
@@ -142,10 +127,6 @@ app.include_router(
     tags=["Nursing Care Plans"]
 )
 
-
-# =================================================================
-# SYSTEM ENDPOINTS
-# =================================================================
 
 # Base API Status
 @app.get("/")
