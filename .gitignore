@@ -6,17 +6,14 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-
 node_modules/
 dist/
 dist-ssr/
-
 
 .env
 .env.production
 .env.development
 *.local
-
 
 .vscode/*
 !.vscode/extensions.json
@@ -28,35 +25,23 @@ dist-ssr/
 *.sln
 *.sw?
 
-
 .venv/
 Backend/.venv/
-
 
 __pycache__/
 Backend/__pycache__/
 Backend/*/__pycache__/
 Backend/*/*/__pycache__/
 
-
+# Keep environment variables and service keys ignored for security!
 Backend/.env
 Backend/.env.production
 Backend/.env.development
-
-
-Backend/controllers/
-Backend/database/
-Backend/services/
-Backend/utils/
-
-
 nurseonServiceAccountKey.json
 Backend/nurseonServiceAccountKey.json
 
-
 Backend/logs/
 Backend/*.log
-
 
 Backend/.vscode/
 Backend/.idea/

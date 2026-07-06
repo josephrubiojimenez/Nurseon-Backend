@@ -1,24 +1,24 @@
-# routes/document.py
-from fastapi import APIRouter, HTTPException, status, Query
-from typing import Optional
 import logging
+from services.documents_service import DocumentsService
 
-logger = logging.getLogger("documents")
-doc_router = APIRouter()
-controller = DocumentsController()
+logger = logging.getLogger("documents_controller")
 
-@doc_router.get("/", status_code=status.HTTP_200_OK)
-async def get_all_documents():
-    return controller.get_all_documents()
+class DocumentsController:
+    def __init__(self):
+        self.service = DocumentsService()
 
-@doc_router.get("/{doc_id}", status_code=status.HTTP_200_OK)
-async def get_document(doc_id: str):
-    return controller.get_document(doc_id)
+    def get_all_documents(self):
+        logger.info("Controller passing request to get all documents.")
+        return self.service.get_all_documents()
 
-@doc_router.get("/category/{category}", status_code=status.HTTP_200_OK)
-async def get_documents_by_category(category: str):
-    return controller.get_documents_by_category(category)
+    def get_document(self, doc_id: str):
+        logger.info(f"Controller passing request to get document: {doc_id}")
+        return self.service.get_document_by_id(doc_id)
 
-@doc_router.get("/search/", status_code=status.HTTP_200_OK)
-async def search_documents(query: str = Query(..., min_length=1)):
-    return controller.search_documents(query)
+    def get_documents_by_category(self, category: str):
+        logger.info(f"Controller passing request to filter by category: {category}")
+        return self.service.get_documents_by_category(category)
+
+    def search_documents(self, query: str):
+        logger.info(f"Controller passing search request with query: {query}")
+        return self.service.search_documents(query)
