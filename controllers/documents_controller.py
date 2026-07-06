@@ -1,6 +1,7 @@
 # routes/document.py
 from fastapi import APIRouter, HTTPException, status, Query
 from typing import Optional
+import logging
 
 logger = logging.getLogger("documents")
 doc_router = APIRouter()
