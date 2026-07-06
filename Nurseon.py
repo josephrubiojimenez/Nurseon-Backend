@@ -2,16 +2,13 @@ import os
 import sys
 from dotenv import load_dotenv
 load_dotenv()
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi import _rate_limit_exceeded_handler
-
 from database.firebase import db 
 from utils.firebase_health import log_firebase_status
-
 from route.smart_notes import smart_notes_router
 from route.auth import auth_router
 from route.document import doc_router
@@ -22,6 +19,9 @@ from route.nurseon_ai_chat import nurseon_ai_chat_router, limiter
 from route.mock_board_exam import mock_board_exam_router
 from route.nursing_care_plans import nursing_care_plans_router
 
+
+
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
@@ -31,6 +31,7 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     log_firebase_status()
+
 
 origins = [
     "http://localhost:5173",
@@ -45,6 +46,7 @@ origins = [
     os.environ.get("FRONTEND_URL", ""),
 ]
 
+
 origins = [origin.rstrip("/") for origin in origins if origin]
 
 app.add_middleware(
@@ -56,36 +58,75 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
+
 # Authentication
-app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
+app.include_router(
+    auth_router,
+    prefix="/api/auth",
+    tags=["Authentication"]
+)
 
 # Feature - Read docs
-app.include_router(doc_router, prefix="/api/documents", tags=["Read Documents"])
+app.include_router(
+    doc_router,
+    prefix="/api/documents",
+    tags=["Read Documents"]
+)
 
 # Feature - Smart notes
-app.include_router(smart_notes_router, prefix="/api/smart-notes", tags=["Smart Notes"])
+app.include_router(
+    smart_notes_router,
+    prefix="/api/smart-notes",
+    tags=["Smart Notes"]
+)
 
 # Feature - Quiz
-app.include_router(quiz_router, prefix="/api/quiz", tags=["Quiz"])
+app.include_router(
+    quiz_router,
+    prefix="/api/quiz",
+    tags=["Quiz"]
+)
 
 # Feature - Case Study
-app.include_router(case_studies_router, prefix='/api/case-studies', tags=["Case Studies"])
+app.include_router(
+    case_studies_router,
+    prefix='/api/case-studies',
+    tags=["Case Studies"]
+)
 
 # Feature - AI
-app.include_router(nurseon_ai_chat_router, prefix='/api/nurseon-ai', tags=["Nurseon AI"])
+app.include_router(
+    nurseon_ai_chat_router,
+    prefix='/api/nurseon-ai',
+    tags=["Nurseon AI"]
+)
 
 # Feature - Mock Board Exam
-app.include_router(mock_board_exam_router, prefix='/api/mock-board-exam', tags=["Mock Exam"])
+app.include_router(
+    mock_board_exam_router,
+    prefix='/api/mock-board-exam',
+    tags=["Mock Exam"]
+)
 
 # Feature - Progress
-app.include_router(progress_router, prefix="/api/progress", tags=["Progress"])
+app.include_router(
+    progress_router,
+    prefix="/api/progress",
+    tags=["Progress"]
+)
 
 # Feature - Nursing Care Plan
-app.include_router(nursing_care_plans_router, prefix="/api/nursing-care-plans", tags=["Nursing Care Plans"])
+app.include_router(
+    nursing_care_plans_router,
+    prefix="/api/nursing-care-plans",
+    tags=["Nursing Care Plans"]
+)
+
 
 # Base API Status
 @app.get("/")
@@ -104,6 +145,7 @@ async def health_check():
         "environment": os.environ.get("ENVIRONMENT", "development"),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
+
 
 if __name__ == "__main__":
     import uvicorn
