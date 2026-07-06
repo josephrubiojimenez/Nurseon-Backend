@@ -2,8 +2,6 @@
 from fastapi import APIRouter, HTTPException, status, Query
 from typing import Optional
 
-from controllers.documents_controller import DocumentsController
-
 logger = logging.getLogger("documents")
 doc_router = APIRouter()
 controller = DocumentsController()
