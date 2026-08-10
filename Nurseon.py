@@ -18,6 +18,7 @@ from route.progress import progress_router
 from route.nurseon_ai_chat import nurseon_ai_chat_router, limiter
 from route.mock_board_exam import mock_board_exam_router
 from route.nursing_care_plans import nursing_care_plans_router
+from route.anatomy import anatomy_router
 
 
 
@@ -125,6 +126,13 @@ app.include_router(
     nursing_care_plans_router,
     prefix="/api/nursing-care-plans",
     tags=["Nursing Care Plans"]
+)
+
+# Feature - Anatomy & Clinical Lab
+app.include_router(
+    anatomy_router,
+    prefix="/api/anatomy",
+    tags=["Anatomy Lab"]
 )
 
 
